@@ -9,8 +9,9 @@
  * rest are refusals carrying their reason, never a guess. Camera-locked layer 3
  * ($81-$BF) is world-locked and draws from the entrance camera (#563,
  * docs/rom/layer3-world-locked.md); $00 off Castle1 and Underground1 and mode 0E
- * still refuse. A vertical map draws only the screen-locked Y $C0 case (#806). The main/sub designations only mean BG1/BG2/BG3 in
- * BG mode 1, so an unverified mode keeps the old stacking and no math.
+ * still refuse. A vertical map draws only the screen-locked Y $C0 case (#806).
+ * The main/sub designations only mean BG1/BG2/BG3 in BG mode 1, so an unverified
+ * mode keeps the old stacking and no math.
  */
 import type { RomFile } from '../RomFile'
 import type { RgbaColor } from '../GraphicsDecoder'

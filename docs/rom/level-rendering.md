@@ -237,8 +237,8 @@ Layer1Y 0, 256, 512, 768, 1024), Layer3Y = BG3VOFS = 192 in all five and the vis
 one machine, vanilla. Every other vertical case stays refused: `$00` off tilesets 1 and 3 gets the same
 "camera-locked layer 3" reason as a horizontal map; `$81`-`$BF` off them, which draws world-locked on a
 horizontal map (#563), gets "vertical maps" unless BG3 is alone on the main screen (mode 0E), which stays
-"camera-locked layer 3"; and a tide byte, `$80`,
-`$C0`+ or `$00` on tileset 1 or 3 gets "vertical map with an untraced layer 3 type". Vanilla: the sweep test "vanilla
+"camera-locked layer 3"; and a tide byte, `$80` or `$C0`+ on any tileset,
+or `$00` on tileset 1 or 3, gets "vertical map with an untraced layer 3 type". Vanilla: the sweep test "vanilla
 vertical maps with a drawn layer 3 are exactly $0E7 and $1CE" finds only those two.
 Settings
 `$00` is Layer3TideSetting 0 (not a tide: 512 px repeat, whole tilemap), the non-tide path of `CODE_05C40C`: off Castle1
