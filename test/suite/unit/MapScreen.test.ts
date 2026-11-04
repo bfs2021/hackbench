@@ -529,7 +529,11 @@ describe('palace art (synthetic)', () => {
   it('an unreadable palace falls back to its reason', () => {
     const icons = palaceIconsOf(art)
     expect(icons[0]).toMatchObject({ palace: 'yellow', uncleared: expect.any(String) })
-    expect(icons[1]).toEqual({ palace: 'green', unavailable: 'nope' })
+    expect(icons[1]).toEqual({
+      palace: 'green',
+      unavailable: 'this block could not be drawn on this ROM.',
+      detail: 'nope',
+    })
   })
 
   it('switch buttons with no readable art say why, and a map that cannot be built names its reason', () => {
@@ -539,11 +543,15 @@ describe('palace art (synthetic)', () => {
     if (r.status !== 'ok') throw new Error(r.status)
     expect(r.switchArt).toEqual({})
     expect(Object.keys(r.switchUnavailable).sort()).toEqual(['blue', 'onOff', 'silver'])
-    expect(r.switchUnavailable.onOff).toMatch(/ON\/OFF/)
+    expect(r.switchDetail?.onOff).toMatch(/ON\/OFF/)
     const failed = toolbarArtOf(empty, { ok: false, reason: 'no level data' }, art)
     if (failed.status !== 'ok') throw new Error(failed.status)
-    expect(failed.switchUnavailable).toEqual({ blue: 'no level data', silver: 'no level data', onOff: 'no level data' }) // prettier-ignore
-    expect(failed.icons[1]).toEqual({ palace: 'green', unavailable: 'nope' })
+    expect(failed.switchDetail).toEqual({ blue: 'no level data', silver: 'no level data', onOff: 'no level data' }) // prettier-ignore
+    expect(failed.icons[1]).toEqual({
+      palace: 'green',
+      unavailable: 'this block could not be drawn on this ROM.',
+      detail: 'nope',
+    })
   })
 })
 
@@ -724,6 +732,28 @@ describe('buildL1Inputs (synthetic)', () => {
     expect(r.inputs.unverified).toHaveLength(1)
     expect(r.inputs.unverified[0]).toMatch(/\$0DADEB .*not verified.*loader/)
     expect((screenResult(r.inputs, 0) as { note?: string }).note).toContain(r.inputs.unverified[0]!)
+  })
+
+  it('a refused object reaches inputs.refusedCells and the screen reply, without a ROM (#816)', () => {
+    vi.mocked(GfxReal.gfxSource).mockReturnValueOnce({ ok: true } as never)
+    vi.mocked(Map16Real.map16TileCapacity).mockReturnValueOnce({} as never)
+    vi.mocked(StockReal.readLevelCol1).mockReturnValueOnce({ bg: 0, obj: 0 } as never)
+    vi.mocked(AnimReal.loadAnimationDataOrReason).mockReturnValueOnce({ ok: false, reason: 'stub' })
+    vi.mocked(ExReal.loadExAnimData).mockReturnValueOnce(null)
+    vi.mocked(Map16Real.loadMap16WithPipeVariants).mockReturnValueOnce({ tiles: [], pipeVariants: [] } as never) // prettier-ignore
+    vi.mocked(GfxReal.loadVram).mockReturnValueOnce({} as never)
+    const objs = [{ type: 'standard', objectNumber: 0x12, settings: 0xe5, x: 9, y: 2 }]
+    const spy = vi.mocked(Expander.expandMapOwned)
+    const real = spy.getMockImplementation()!
+    const refusal = { objectIndex: 0, handler: 0x0dfff0, reason: 'REFUSED FOR TEST' }
+    spy.mockImplementationOnce((...a) => ({ ...real(...a), refusals: [refusal] }))
+    vi.mocked(ParserReal.parseLevelObjects).mockReturnValueOnce({ objects: objs } as never)
+    const r = buildL1Inputs(fakeRom(0), 0x105, UNCLEARED)
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.inputs.refusedCells).toMatchObject([{ x: 9, y: 2, objectIndex: 0, objectType: 'type 18' }]) // prettier-ignore
+    const wire = screenResult(r.inputs, 0) as { refusedCells?: unknown }
+    expect(wire.refusedCells).toEqual(r.inputs.refusedCells)
+    expect(screenResult({ ...r.inputs, refusedCells: [] }, 0)).not.toHaveProperty('refusedCells', expect.anything()) // prettier-ignore
   })
 
   it('hands expandMapOwned a note sink, not an opt-out, so refusals can reach the inputs (#342)', () => {

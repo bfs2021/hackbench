@@ -17,7 +17,11 @@ import {
 } from '../../../src/rom/SubmapFlagGate'
 import { WILD } from '../../../src/rom/BytePattern'
 import { readMapEntrances } from '../../../src/rom/ReadMapEntrances'
-import { buildL3Verdict } from '../../../src/rom/model/L3Model'
+import {
+  buildL3Verdict,
+  EXIT_GRAPH_UNAVAILABLE,
+  GRAPH_UNAVAILABLE,
+} from '../../../src/rom/model/L3Model'
 import { buildMapPayload, buildMapWithGraph } from '../../../src/rom/model/MapBuilder'
 import { buildGraph } from '../../../src/rom/model/rehydrate'
 import { parseLevelHeader } from '../../../src/rom/LevelParser'
@@ -88,7 +92,7 @@ describe('the layer 3 camera is unverified when the entrance-position code is no
     const rom = l3Cart()
     const v = verdict(rom, stockOf(rom))
     expect(v.l3).not.toBeNull()
-    expect(v.l3?.camYUnverified).toBeUndefined()
+    expect(v.l3?.camYReasons).toBeUndefined()
   })
 
   // A vertical map's band is screen-locked (#806): its place does not use the entrance camera, so an
@@ -100,10 +104,14 @@ describe('the layer 3 camera is unverified when the entrance-position code is no
     const spans = stockOf(rom)
     flipAt(rom, SPANS[0]!.addr)
     const run = (l: never) => buildL3Verdict(rom, MAP, l, { ok: true, mode: 1 }, () => [[]] as never, { ok: true }, undefined, ONLY_SECONDARY, spans) // prettier-ignore
-    expect(run(hl1!).l3?.camYUnverified).toBeTruthy() // control: a horizontal map reports it
+    expect(run(hl1!).l3?.camYReasons).toBeTruthy() // control: a horizontal map reports it
     const v = run(vl1!)
     expect(v.l3).not.toBeNull()
-    expect(v.l3?.camYUnverified).toBeUndefined()
+    expect(v.l3?.camYReasons).toBeUndefined()
+    // Nor does an unbuilt exit graph (#910): which entrance starts the map cannot move a screen-locked band.
+    const noGraph = (l: never) => buildL3Verdict(rom, MAP, l, { ok: true, mode: 1 }, () => [[]] as never, { ok: true }, undefined, GRAPH_UNAVAILABLE) // prettier-ignore
+    expect(noGraph(hl1!).l3?.camYReasons).toContain(EXIT_GRAPH_UNAVAILABLE) // control
+    expect(noGraph(vl1!).l3?.camYReasons).toBeUndefined()
   })
 
   // Every byte of every checked range, not a sample: a flip at any offset must name its own range.
@@ -117,7 +125,7 @@ describe('the layer 3 camera is unverified when the entrance-position code is no
         const v = verdict(rom, spans)
         expect(v.l3, `offset ${off}`).not.toBeNull() // best effort, never blanked
         expect(v.l3?.camYPx).toBeDefined()
-        expect(v.l3?.camYUnverified?.startsWith(`${hex6(s.addr)} `), `offset ${off}`).toBe(true)
+        expect(v.l3?.camYReasons?.[0]?.startsWith(`${hex6(s.addr)} `), `offset ${off}`).toBe(true)
         flipAt(rom, s.addr + off)
       }
     },
@@ -132,7 +140,7 @@ describe('the layer 3 camera is unverified when the entrance-position code is no
       c.bytes.forEach((b, off) => {
         if (b === WILD) return
         flipAt(rom, c.addr + off)
-        expect(verdict(rom, spans).l3?.camYUnverified?.startsWith(`${hex6(c.addr)} `), `offset ${off}`).toBe(true) // prettier-ignore
+        expect(verdict(rom, spans).l3?.camYReasons?.[0]?.startsWith(`${hex6(c.addr)} `), `offset ${off}`).toBe(true) // prettier-ignore
         flipAt(rom, c.addr + off)
         flipped++
       })
@@ -206,7 +214,7 @@ describe('the exit graph stays intact while the position routine changes', () =>
     withStockCode(rom)
     const l1Ptr = (map: number, at: number) => rom.writeAt(ADDR.LEVEL_L1_PTR + map * 3, [at & 0xff, (at >> 8) & 0xff, at >> 16]) // prettier-ignore
     l1Ptr(0x105, 0x068000) // a submap root: its exits index the $1xx half
-    rom.writeAt(0x068000, [0, 0, 0, 0, 0, 0x00, 0x02, 0x00, 0x10, 0x00, 0x02, 0x00, 0x11, 0xff])
+    rom.writeAt(0x068000, [0, 0, 0, 0, 0, 0x00, 0x02, 0x00, 0x10, 0x01, 0x02, 0x00, 0x11, 0xff])
     l1Ptr(0x177, 0x06b000)
     rom.writeAt(0x06b000, [0, 0, 0, 0, 0, 0x42, 0xff])
     rom.writeAt(ADDR.SEC_EXIT_DEST + 0x110, [0x77, 0x77])
@@ -226,7 +234,7 @@ describe('the exit graph stays intact while the position routine changes', () =>
     const fp = fingerprintsOf(rom)
     const stock = readMapEntrances(smw, fp)
     expect(stock).toBeDefined()
-    expect(stock!.get(0x177)).toEqual({ overworld: false, primary: false, secondary: [0x110, 0x111] }) // prettier-ignore
+    expect(stock!.get(0x177)).toEqual({ overworld: false, primary: false, secondary: [0x110, 0x111], route: 0x110 }) // prettier-ignore
     expect(entrancePositionGate(rom, spans)).toBeNull()
 
     rom.writeAt(0x05d90c, [0x0f]) // outside every span the graph checks
