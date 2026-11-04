@@ -715,6 +715,8 @@ describe('maps layer 3 is not drawn on (synthetic)', () => {
     }
     // $81 off tileset 1 and 3 is world-locked (#563): it draws on a horizontal map, so a vertical one is refused for being vertical.
     for (const ts of [0, 2]) expect(buildL3Verdict(vRom(ts, 0x81), 5, vertical(ts), BG_OK, chars, GATE_OK)).toMatchObject({ l3: null, reason: 'Layer 3 not drawn yet: vertical maps' }) // prettier-ignore
+    // $00 off them follows the camera (BG3 cleared, never world-locked), so it keeps the horizontal reason.
+    for (const ts of [0, 2]) expect(buildL3Verdict(vRom(ts, 0x00), 5, vertical(ts), BG_OK, chars, GATE_OK)).toMatchObject({ l3: null, reason: 'Layer 3 not drawn yet: camera-locked layer 3' }) // prettier-ignore
   })
 
   it('a vertical map on $81-$BF, tileset 1 or 3, draws: Y $C0, X 0', () => {
