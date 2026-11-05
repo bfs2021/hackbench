@@ -220,6 +220,7 @@ function marker(id: number): Uint8ClampedArray {
  */
 const RING_LIGHT: RgbaColor = [235, 235, 235, 255]
 const RING_EDGE: RgbaColor = [40, 40, 40, 255]
+/** The ring's RGBA: a light ring with a dark outer edge and a center dot, every other pixel clear. */
 function ring(): Uint8ClampedArray {
   const out = new Uint8ClampedArray(MARK * MARK * 4)
   for (let y = 0; y < MARK; y++) {
@@ -235,6 +236,7 @@ const RING = base64(ring())
 /** Priority 3 everywhere: the ring sits above every tile, so a high-priority tile never hides it (it is see-through, so it hides nothing). */
 const RING_PRIORITY = base64(new Uint8ClampedArray(MARK * MARK).fill(3))
 
+/** The quiet marker's DTO: the ring at the placed spot, above every tile, with the reason and (when routed) the loader class. */
 function quiet(s: LevelSprite, reason: string, kind: LoadClass | undefined): MapSpriteDto {
   const [x, y] = [pixelX(s), s.y * TILE]
   return {
@@ -266,6 +268,7 @@ function placeholder(s: LevelSprite, reason: string, unverified?: string): MapSp
   }
 }
 
+/** The bytes as base64, the form the DTO carries them in. */
 function base64(b: Uint8ClampedArray): string {
   return Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString('base64')
 }
@@ -841,6 +844,10 @@ export function interpRunner(
     // The map's own loader placed it at map load (D156): it also spawns at the map-load camera.
     const opening = !!w && s.index >= 0 && s.index < 128 && !!w[SPRITE_LOAD_STATUS + s.index]
     let m = run(rom, s.spriteId, seed(camera, { opening }))
+    // An empty run is only "ran fine" if the loader's routing was readable: otherwise the id may be a shooter, generator or
+    // scroll command the game never runs as a sprite, so the run is unverified (it keeps the box and says why).
+    if (classes.status === 'unavailable' && m.emptyReason && !m.unverifiedReason)
+      m = { ...m, unverifiedReason: `the loader's id routing could not be read (${classes.reason}), so an empty run may be a shooter, generator or scroll command` } // prettier-ignore
     // A sprite placed at the game's own layout (the bonus game) was replayed in the loader's top slot; an earlier loaded sprite
     // may have taken it, which moves one block by a pixel and changes its item (measured on $000, slots 9 vs 8): drawn, marked.
     if (

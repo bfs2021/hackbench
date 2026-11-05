@@ -35,10 +35,13 @@ const GENERATOR = [0xc9, null, 0x90, null, 0xc9, null, 0xb0, null, 0x38, 0xe9, n
 const SHOOTER = [0xc9, null, 0x90, null, 0x20, null, null, 0x80, null, 0xa9] // prettier-ignore
 export const SHAPES = { scroll: SCROLL, loaderCall: LOADER_CALL, generator: GENERATOR, shooter: SHOOTER } // prettier-ignore
 
+/** An unreadable loader, with the reason. */
 const fail = (reason: string): LoadClasses => ({ status: 'unavailable', reason })
+/** Whether the opcode shape `want` (null matches any byte) sits at `at`. */
 const matches = (code: Uint8Array, at: number, want: (number | null)[]) =>
   at >= 0 && want.every((w, k) => w === null || code[at + k] === w)
 
+/** Every place in `code` the shape matches. */
 function find(code: Uint8Array, want: (number | null)[]): number[] {
   const hits: number[] = []
   for (let i = 0; i + want.length <= code.length; i++) if (matches(code, i, want)) hits.push(i)
@@ -49,16 +52,19 @@ function find(code: Uint8Array, want: (number | null)[]): number[] {
 const target = (code: Uint8Array, at: number) =>
   at + 2 + (code[at + 1]! < 0x80 ? code[at + 1]! : code[at + 1]! - 0x100)
 
-const cache = new WeakMap<RomFile, LoadClasses>()
+/** Per ROM and `version`: a `writeAt` to the same instance makes the read happen again. */
+const cache = new WeakMap<RomFile, { version: number; result: LoadClasses }>()
 
+/** The game's own routing of a sprite-list id, read from this ROM (or why it cannot be read). */
 export function loadClasses(rom: RomFile): LoadClasses {
   const hit = cache.get(rom)
-  if (hit) return hit
-  const r = read(rom)
-  cache.set(rom, r)
-  return r
+  if (hit && hit.version === rom.version) return hit.result
+  const result = read(rom)
+  cache.set(rom, { version: rom.version, result })
+  return result
 }
 
+/** Reads the three class bounds from bank 2 and checks the chain that links them. */
 function read(rom: RomFile): LoadClasses {
   const code = rom.readAt(BANK2, 0x8000)
   if (!code) return fail('bank 2 of the ROM could not be read')

@@ -424,3 +424,43 @@ describe('the runner routes by what LoadClass read, with no fallback to the game
     expect(ran).toEqual([0xe8, 0xc9])
   })
 })
+
+describe('review findings (#1273)', () => {
+  it('loadClasses re-reads after a write to the same ROM: the cache is keyed on the version', () => {
+    const rom = cart()
+    expect(reasonOf(rom)).toBe('ok')
+    rom.writeAt(0x028000 + SC + 18, [0xa1]) // the scroll subtract no longer matches its compare
+    expect(reasonOf(rom)).toMatch(/scroll test and the command number/)
+    rom.writeAt(0x028000 + SC + 18, [0xa0]) // and back: read again, ok again
+    expect(reasonOf(rom)).toBe('ok')
+  })
+
+  it('a shooter with no sprite name still gets the timer words, not the generic line', () => {
+    expect(quietText({ kind: 'shooter', name: undefined })).toBe('Shooter: fires on a timer; nothing is drawn until it does') // prettier-ignore
+  })
+
+  it('an empty run whose loader routing could not be read is unverified (so it keeps the box), unless it can be read', () => {
+    const seedFor = () => withSeed({ loaded: new Uint8Array(0x2000) })
+    const geometry = { isVertical: false, screenCount: 1 }
+    const empty = () => runModel({ emptyReason: 'drew no OAM tile' })
+    const unreadable = interpDrawer(
+      cart(put => put(SH, [0xea, 0xea])),
+      0,
+      geometry,
+      empty,
+      seedFor,
+    )
+    const r = unreadable(sprite(0x70))
+    expect(r).toMatchObject({ ok: false, empty: true, unverified: expect.stringContaining('routing could not be read') }) // prettier-ignore
+    expect(drawSprites([sprite(0x70)], model, () => r, undefined, undefined)[0]!.status).toBe(
+      'placeholder',
+    )
+    // A reason already there is kept, not replaced.
+    const kept = interpDrawer(cart(put => put(SH, [0xea, 0xea])), 0, geometry, () => runModel({ emptyReason: 'x', unverifiedReason: 'seed lacks state' }), seedFor)(sprite(0x70)) // prettier-ignore
+    expect(kept).toMatchObject({ unverified: expect.stringContaining('seed lacks state') })
+    // Readable routing: the empty run is verified, so quiet.
+    const readable = interpDrawer(cart(), 0, geometry, empty, seedFor)(sprite(0x70))
+    expect(readable).toMatchObject({ ok: false, empty: true })
+    expect('unverified' in readable).toBe(false)
+  })
+})

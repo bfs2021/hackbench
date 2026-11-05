@@ -130,8 +130,8 @@ export function shiftNote(
 export function quietText(s: Pick<MapSpriteDto, 'kind' | 'name' | 'reason'>): string {
   if (s.kind === 'scroll')
     return 'Scroll command: changes how the screen scrolls; it has no picture in the game'
-  if (s.kind === 'shooter' && s.name)
-    return `${s.name}: fires on a timer; nothing is drawn until it does`
+  if (s.kind === 'shooter')
+    return `${s.name ?? 'Shooter'}: fires on a timer; nothing is drawn until it does`
   if (s.kind === 'generator')
     return `${s.name ?? 'Generator'}: runs in the background; it has no picture on the map`
   // A reason the Properties view has words for says why (for example a sprite only a player action reveals).
