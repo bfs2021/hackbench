@@ -114,7 +114,10 @@ test.describe('vanilla ROM, map $126', () => {
       id =>
         getSvc('ApplicationShell')
           .closeWidget(id)
-          .catch(() => undefined),
+          .then(
+            () => undefined,
+            () => undefined,
+          ), // not the widget: page.evaluate must serialize the result
       'hackbench.map-view:' + SLOT,
     )
     if (tmp) fs.rmSync(tmp, { recursive: true, force: true })
@@ -150,6 +153,9 @@ test.describe('vanilla ROM, map $126', () => {
       // One scroll position for both clips: `locate` scrolls the pixel to the middle of the view, so a second call
       // would move the first clip. The offsets inside the box are plain arithmetic on the zoom.
       const origin = await locate(page, SLOT, mapW, mapH, s.x, s.y)
+      // The scroll repaints the canvases over a few frames; screenshots taken at once differ even with nothing changed
+      // (seen on #42: on/on screenshots differed everywhere). The spec helpers offer no settled signal, so wait a fixed time.
+      await page.waitForTimeout(1500)
       await page.mouse.move(0, 0)
       const clipOf = (lx, ly, w, h) => ({
         x: Math.round(origin.x + lx * origin.z),
@@ -164,6 +170,7 @@ test.describe('vanilla ROM, map $126', () => {
       }
       const [insideOn, ringOn] = await shots()
       await toggle.click()
+      await page.waitForTimeout(500) // the layer repaint
       const [insideOff, ringOff] = await shots()
       expect(insideOn.equals(insideOff), 'the tile under the clear interior is unchanged').toBe(
         true,
@@ -182,7 +189,10 @@ test.describe('no ROM: a canned quiet scroll command', () => {
       i =>
         getSvc('ApplicationShell')
           .closeWidget('hackbench.map-view:' + i)
-          .catch(() => undefined),
+          .then(
+            () => undefined,
+            () => undefined,
+          ), // not the widget: page.evaluate must serialize the result
       INDEX,
     )
     expect(pageErrors).toEqual([])

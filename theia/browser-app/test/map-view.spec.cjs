@@ -1424,7 +1424,7 @@ test('the sprite toggle hides and restores the sprites, and changes what is on s
   expect((await shownPixels(page, strip)).checksum).toBe(shown.checksum)
 })
 
-test('an interpreter-drawn sprite shows its own pixels where the service placed it; a miss shows a marker', async ({
+test('an interpreter-drawn sprite shows its own pixels where the service placed it; a sprite that draws nothing shows the quiet marker', async ({
   page,
 }) => {
   const project = await createProject(page, path.join(tmp, 'MyHack'))
@@ -1442,14 +1442,16 @@ test('an interpreter-drawn sprite shows its own pixels where the service placed 
   const koopa = reply.sprites.find(s => s.id === 5)
   expect(koopa).toMatchObject({ x: 432, y: 320, status: 'drawn' })
   expect(koopa.box).toEqual({ x0: 432, y0: 304, x1: 448, y1: 336 })
-  // After #968 the one $106 miss is $4D at (3760, 368), in screen 14 (3584-3840): measured on vanilla.
-  const marker = reply.sprites.find(s => s.status === 'placeholder' && s.id === 0x4d)
-  expect(marker, 'a marker on $106').toBeTruthy()
+  // After #968 the one $106 miss is $4D at (3760, 368), in screen 14 (3584-3840): measured on vanilla. Since #1011 a run that
+  // drew nothing is the quiet marker, not the failure box. $4D may change again under the reveal work (#1132).
+  const marker = reply.sprites.find(s => s.status === 'quiet' && s.id === 0x4d)
+  expect(marker, 'a quiet marker on $106').toBeTruthy()
   // D139 D: INIT runs for the picture, so the P-switch ($3E) is drawn at its list position (D134).
   const pswitch = reply.sprites.filter(s => s.id === 0x3e)
   expect(pswitch.map(s => s.status)).toEqual(['drawn'])
   expect(pswitch[0]).toMatchObject({ x: 4512, y: 272 })
-  expect(reply.sprites.filter(s => s.status === 'placeholder')).toHaveLength(1)
+  expect(reply.sprites.filter(s => s.status === 'quiet')).toHaveLength(1) // the one miss
+  expect(reply.sprites.filter(s => s.status === 'placeholder')).toHaveLength(0) // and no failure box
   expect(marker).toMatchObject({ id: 0x4d, x: 3760, y: 368 })
   const mScreen = Math.floor(marker.box.x0 / 256)
   expect(mScreen).toBe(14)
@@ -1495,9 +1497,11 @@ test('an interpreter-drawn sprite shows its own pixels where the service placed 
   expect(read.koopa.inBox, 'canvas pixels inside the absolute box (432,304)-(448,336)').toBeGreaterThan(0) // prettier-ignore
   expect(read.koopa.same, 'the canvas holds the served bitmap at its box').toBe(true)
   expect(read.marker.same).toBe(true)
-  // The marker is 16 x 16 at the anchor, its frame the editor blue.
+  // The marker is 16 x 16 at the anchor: the quiet ring, whose corner is clear (the failure box's was the editor blue frame)
+  // and which paints some opaque pixels (the ring and its dot).
   expect([marker.box.x1 - marker.box.x0, marker.box.y1 - marker.box.y0]).toEqual([16, 16])
-  expect(read.marker.corner).toEqual([90, 200, 255, 255])
+  expect(read.marker.corner).toEqual([0, 0, 0, 0])
+  expect(read.marker.opaque, 'the ring is painted').toBeGreaterThan(0)
 })
 
 test('$4F on $105 is served at its stream position: the INIT move (+8, -1) is not shown at rest (D134)', async ({

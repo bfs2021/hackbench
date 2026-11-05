@@ -251,6 +251,21 @@ const P = 0x150 // the platforms test
 const G = 0x1a0 // the generator test
 const SH = 0x1b4 // the shooter test, 20 bytes past the generator test
 const rel = (at: number, to: number) => (to - (at + 2)) & 0xff
+// The Eeries/platforms test shape with operands (compare value, saved-index cell, call target) unlike the game's,
+// so no 8-byte run of the fixture is a run of the vanilla ROM (D126); the reader takes only the opcodes and the hops.
+const call = (at: number, cmp: number, cell: number, to: number[], hop: number) => [
+  0xc9,
+  cmp,
+  0xd0,
+  rel(at + 2, hop),
+  0x5a,
+  0xda,
+  0x88,
+  0x84,
+  cell,
+  0x20,
+  ...to,
+]
 function cart(
   edit: (put: (at: number, bytes: number[]) => void, buf: Buffer) => void = () => undefined,
 ): RomFile {
@@ -258,8 +273,8 @@ function cart(
   buf[0x7fd5] = 0x20
   const put = (at: number, bytes: number[]) => buf.set(bytes, 0x10000 + at)
   put(S, [...ENTRY, 0xc9, 0xa0, 0x90, rel(SC + 2, E), 0xad, 0x34, 0x12, 0x0d, 0x56, 0x12, 0xd0, 0x20, 0x5a, 0xda, 0xa5, 0x05, 0x38, 0xe9, 0xa0, 0x8d, 0x78, 0x12]) // prettier-ignore
-  put(E, [0xc9, 0xde, 0xd0, rel(E + 2, P), 0x5a, 0xda, 0x88, 0x84, 0x03, 0x20, 0x00, 0x90])
-  put(P, [0xc9, 0xe0, 0xd0, rel(P + 2, G), 0x5a, 0xda, 0x88, 0x84, 0x03, 0x20, 0x00, 0x90])
+  put(E, call(E, 0xd3, 0x07, [0x34, 0x92], P))
+  put(P, call(P, 0xd7, 0x09, [0x56, 0x93], G))
   // generators 0x50..0x5f; shooters 0x4b..0x4f: a gap of 5 below the generator bound, unlike the game's.
   put(G, [0xc9, 0x50, 0x90, rel(G + 2, SH), 0xc9, 0x60, 0xb0, 0x20, 0x38, 0xe9, 0x50, 0x1a, 0x8d, 0x9a, 0x12]) // prettier-ignore
   put(SH, [0xc9, 0x4b, 0x90, 0x05, 0x20, 0x00, 0x90, 0x80, 0x02, 0xa9, 0x01])
@@ -350,7 +365,7 @@ describe('LoadClass reads the loader from its operands', () => {
     // The Eeries test moves ahead of the scroll test: the scroll test's branch goes backward.
     const E2 = 0xe0
     const moved = (put: (at: number, b: number[]) => void) => {
-      put(E2, [0xc9, 0xde, 0xd0, rel(E2 + 2, P), 0x5a, 0xda, 0x88, 0x84, 0x03, 0x20, 0x00, 0x90])
+      put(E2, call(E2, 0xd3, 0x07, [0x34, 0x92], P))
       put(SC + 3, [rel(SC + 2, E2)])
     }
     expect(reasonOf(cart(moved))).toBe('ok')
