@@ -20,6 +20,7 @@ export const LOADING_FRAMES = 'Checking for animation frames...'
 export const animatedText = (n: number) => `Animated: ${n} frames, looping.`
 
 /** Why a sprite is drawn as a numbered marker, in words; the engine's own reason is kept when it is not one of these. */
+/** Plain-words causes by reason code; exported so a quiet marker can use a key another feature adds (#1011). */
 export const WHY_NOT_DRAWN: Record<string, string> = {
   extraBits:
     'It uses the extra-bits marker that custom sprites use, so vanilla art would be wrong.',
@@ -83,6 +84,8 @@ export interface SpriteProps {
   paletteRows: number[]
   /** The engine's own reason for a placeholder, for a tooltip only; the words are in `notes`. */
   rawReason?: string
+  /** Kept off `notes` so the raw cause can never reach the visible text or an accessible name; it is shown only on request (#1166). */
+  rawUnverified?: string
   /** Anything the pane knows it is not showing (interpret, else warn). */
   notes: string[]
 }
@@ -126,6 +129,20 @@ export function shiftNote(
   return `${cause}, so the map draws it ${there}, as the game does. The highlighted tile is where the map stores it.`
 }
 
+/** The engine's cause is not for a first read, so the visible line is fixed plain words and the cause is shown only on request (#1166). */
+export const UNVERIFIED_NOTE = 'Unverified: this sprite may not be drawn exactly as in the game.'
+
+/** Decides which notes get a disclosure: only a note with engine text behind it, so a plain line never shows an empty control (#1166). */
+export const noteTitle = (
+  note: string,
+  p: Pick<SpriteProps, 'rawReason' | 'rawUnverified'>,
+): string | undefined =>
+  note.startsWith('Not drawn')
+    ? p.rawReason
+    : note === UNVERIFIED_NOTE
+      ? p.rawUnverified
+      : undefined
+
 /** The quiet marker's tooltip and Properties line (#1011): the sprite's name, then why nothing shows. Plain words. */
 export function quietText(s: Pick<MapSpriteDto, 'kind' | 'name' | 'reason'>): string {
   if (s.kind === 'scroll')
@@ -142,13 +159,14 @@ export function quietText(s: Pick<MapSpriteDto, 'kind' | 'name' | 'reason'>): st
     : 'Runs normally, but draws nothing on the map'
 }
 
+/** The engine's wording is for diagnosis and is long and technical, so the notes stay plain words and the raw text is carried apart for a tooltip or disclosure (#1166). */
 export function spriteProps(s: MapSpriteDto): SpriteProps {
   const parts = s.status === 'drawn' && s.parts ? s.parts : null
   const notes: string[] = []
   if (s.status === 'placeholder') {
     notes.push(`Not drawn: ${notDrawnText(s.reason)}`)
   } else if (s.status === 'quiet') notes.push(quietText(s) + '.')
-  if (s.unverified) notes.push(`Unverified: ${s.unverified}.`)
+  if (s.unverified) notes.push(UNVERIFIED_NOTE)
   const shift = shiftNote(s)
   if (shift) notes.push(shift)
   if (s.note) notes.push(s.note)
@@ -164,5 +182,6 @@ export function spriteProps(s: MapSpriteDto): SpriteProps {
     paletteRows: parts ? [...new Set(parts.map(p => p.palette))].sort((a, b) => a - b) : [],
     notes,
     ...(s.status === 'placeholder' && s.reason ? { rawReason: s.reason } : {}),
+    ...(s.unverified ? { rawUnverified: s.unverified } : {}),
   }
 }

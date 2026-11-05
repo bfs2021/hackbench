@@ -27,8 +27,10 @@ import {
 } from '../../../theia/extension/src/browser/map-view-model'
 import {
   framesReasonText,
+  noteTitle,
   quietText,
   spriteProps,
+  UNVERIFIED_NOTE,
   WHY_NOT_DRAWN,
 } from '../../../theia/extension/src/browser/sprite-props'
 import type { MapSpriteDto } from '../../../theia/extension/src/common/project-protocol'
@@ -472,5 +474,25 @@ describe('review findings (#1273)', () => {
     const readable = interpDrawer(cart(), 0, geometry, empty, seedFor)(sprite(0x70))
     expect(readable).toMatchObject({ ok: false, empty: true })
     expect('unverified' in readable).toBe(false)
+  })
+})
+
+describe('with the plain unverified note (#1166)', () => {
+  const stream = Uint8Array.from([0, 0x00, 0x01, 0x10, 0x00, 0x02, 0x11, 0xff]) // two entries, ids $10 and $11
+  const m = { ...model, isVertical: false, screenCount: 1 }
+  const drawn = (res: Record<number, SpriteDrawResult>) => spriteLayer(stream, m, draw(res))
+
+  it('a quiet sprite keeps its note and is not counted as unverified; a box with a reason gets the plain line and the raw text', () => {
+    const quiet: SpriteDrawResult = { ok: false, reason: 'drew no OAM tile', empty: true }
+    const unverified: SpriteDrawResult = { ok: false, reason: 'drew no OAM tile', empty: true, unverified: "the loader's id routing could not be read (x)" } // prettier-ignore
+    const r = drawn({ 0x10: quiet, 0x11: unverified })
+    const [q, u] = r.sprites
+    expect([q!.status, u!.status]).toEqual(['quiet', 'placeholder'])
+    expect(r.note).toBe('Unverified: 1 sprite may not be drawn exactly as in the game.') // only the box counts
+    expect(spriteProps(q!).notes[0]).toMatch(/draws nothing on the map\.$/)
+    expect(spriteProps(q!).notes).not.toContain(UNVERIFIED_NOTE)
+    const p = spriteProps(u!)
+    expect(p.notes).toContain(UNVERIFIED_NOTE)
+    expect(noteTitle(UNVERIFIED_NOTE, p)).toBe("the loader's id routing could not be read (x)")
   })
 })
