@@ -2,9 +2,10 @@
  * The quiet marker (#1011): a verdict, never an id list. All synthetic, so CI (no ROM) runs it; the vanilla
  * corpus cases are in QuietMarker.corpus.test.ts.
  */
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import type { LevelSprite } from '../../../src/rom/LevelParser'
 import { RomFile } from '../../../src/rom/RomFile'
+import { SmwRom } from '../../../src/rom/SmwRom'
 import { composeScreen } from '../../../src/rom/model/ColorMath'
 import { FALLBACK_SCREENS } from '../../../src/rom/model/ScreenPlanes'
 import { loadClasses, type LoadClass } from '../../../src/rom/sprites/interp/LoadClass'
@@ -15,6 +16,8 @@ import {
   framesGate,
   framesOf,
   interpDrawer,
+  mapSpriteFrames,
+  mapSprites,
   modelResult,
   spriteLayer,
   type SpriteDrawResult,
@@ -31,8 +34,8 @@ import {
   quietText,
   spriteProps,
   UNVERIFIED_NOTE,
-  WHY_NOT_DRAWN,
 } from '../../../theia/extension/src/browser/sprite-props'
+import { L1ModelCache } from '../../../theia/extension/src/node/map-screen'
 import type { MapSpriteDto } from '../../../theia/extension/src/common/project-protocol'
 import { COLORS } from '../support/mapInputs'
 
@@ -215,21 +218,12 @@ describe('plain words', () => {
     ]
     expect(words[0]).toBe('Bullet Bill Shooter: fires on a timer; nothing is drawn until it does')
     expect(words[1]).toBe('Scroll command: changes how the screen scrolls; it has no picture in the game') // prettier-ignore
-    expect(words[2]).toBe('Some Sprite: runs normally, but draws nothing on the map')
-    expect(words[3]).toBe('Runs normally, but draws nothing on the map')
+    expect(words[2]).toBe(
+      'Some Sprite: nothing is drawn for it on the map; it may only show up in play',
+    )
+    expect(words[3]).toBe('Nothing is drawn for it on the map; it may only show up in play')
     expect(words[4]).toBe('Eerie Generator: runs in the background; it has no picture on the map')
     for (const w of words) expect(w).not.toMatch(/OAM|pass|\$|0x|github|water|fog/i)
-  })
-
-  it('a reason the Properties view has words for says why, before the generic line', () => {
-    WHY_NOT_DRAWN.syntheticKey = 'Only a player action reveals it.'
-    try {
-      expect(quietText({ kind: undefined, name: 'Hidden Thing', reason: 'syntheticKey' })).toBe('Hidden Thing: Only a player action reveals it.') // prettier-ignore
-      expect(quietText({ kind: undefined, name: undefined, reason: 'syntheticKey' })).toBe('Only a player action reveals it.') // prettier-ignore
-      expect(quietText({ kind: undefined, name: 'X', reason: 'no such key' })).toMatch(/runs normally/) // prettier-ignore
-    } finally {
-      delete WHY_NOT_DRAWN.syntheticKey
-    }
   })
 
   it('the hover and Properties carry it; a failed sprite keeps the old line', () => {
@@ -248,30 +242,62 @@ describe('plain words', () => {
   })
 })
 
-// An invented loader routine at the game's call site, table driven and unlike the game's: it reads the id from the list,
-// looks up a class code in a test table and stores a value in the cell of that class. Nothing here rebuilds game code (D126).
+// An invented loader routine at the game's call site, table driven and unlike the game's (D126, rule 9). It reads the
+// entry's id through a copy of the list pointer, looks up a class code in a test table and stores in the cell of that
+// class. It also reads the things the loader's caller seeds (DB, the scroll direction, the list end) and refuses to read
+// the id when a run starts from stale state (X, Y, SRAM, a WRAM latch), so each seed and each reset has a test that fails
+// without it. Every store is a long STA or the A register after TXA: none of the game's adjacent instruction pairs.
 const SITE = 0x028b1d
 const ROUTINE = 0x029000
 const TABLE = 0x029100
+const TABLE_BIT3 = 0x029200
 const SCROLL_CELL = 0x143e
 const GEN_CELL = 0x18b9
-const SHOOT_CELL = 0x1785
+const SHOOT_SLOTS = 0x1783
 const [NORMAL, SHOOT, GEN, SCROLL] = [0, 1, 2, 3]
+const [RTS, BNE_OP, BRA_OP, BEQ_OP] = [0x60, 0xd0, 0x80, 0xf0]
 /** Which class code a table byte holds for an id: shooters 0x30-0x33, generators 0x40-0x4f, scroll commands 0x90 up. */
-const BANDS = (id: number) => (id >= 0x90 ? SCROLL : id >= 0x40 && id < 0x50 ? GEN : id >= 0x30 && id < 0x34 ? SHOOT : NORMAL) // prettier-ignore
-/** What the routine stores: the id (steps with it), the id minus a constant, or the class code (does not step). */
+const BANDS = (id: number) =>
+  id >= 0x90 ? SCROLL : id >= 0x40 && id < 0x50 ? GEN : id >= 0x30 && id < 0x34 ? SHOOT : NORMAL
+/** What the routine stores: the id (steps with it), the id plus a constant, or the class code (does not step). */
 type Store = 'id' | 'offset' | 'flat'
 interface Plan {
   classes?: (id: number) => number
+  /** The table used for an entry with extra bit 3 set; the routine reads it only when this is given. */
+  bit3?: (id: number) => number
   store?: Partial<Record<number, Store>>
-  /** What a normal id's path does: the default returns. */
+  /** What a normal id's path does after the dispatch: the default records itself in SRAM and returns. */
   normal?: number[]
   /** Run the rest of the routine in the $82 mirror of the bank. */
   mirror?: boolean
   /** What follows a store; the default returns, and a run that stops at the store never reaches it. */
   afterStore?: number[]
+  /** The cell a shooter id stores in. */
+  shootCell?: number
+  /** Replace the whole routine. */
+  code?: number[]
 }
-const RTS = 0x60
+/** A normal id: set the SRAM latch, leave X and Y nonzero, return. */
+const NORMAL_PATH = [0xa9, 0x01, 0x8f, 0x00, 0x00, 0x70, 0xa2, 0x01, 0xa0, 0x01, RTS]
+/** 255 times round a two-instruction loop: over 500 steps and well under the cap. */
+const LOOP_500 = [0xa2, 0xff, 0xca, BNE_OP, 0xfd]
+/** The same loop nested 255 deep: over 100,000 steps, past the cap. */
+const LOOP_100K = [0xa0, 0xff, 0xa2, 0xff, 0xca, BNE_OP, 0xfd, 0x88, BNE_OP, 0xf8]
+type Item = number | string | { label: string }
+/** Bytes with branch operands named by label: a string is the displacement to `{ label }`. */
+function assemble(items: Item[]): number[] {
+  const at = new Map<string, number>()
+  let n = 0
+  for (const it of items)
+    if (typeof it === 'object') at.set(it.label, n)
+    else n++
+  const out: number[] = []
+  for (const it of items) {
+    if (typeof it === 'number') out.push(it)
+    else if (typeof it === 'string') out.push((at.get(it)! - (out.length + 1)) & 0xff)
+  }
+  return out
+}
 /** A 512 KB LoROM cart whose call site calls the invented routine; `edit` plants a defect after the build. */
 function cart(
   plan: Plan = {},
@@ -281,33 +307,126 @@ function cart(
   buf[0x7fd5] = 0x20
   const put = (at: number, bytes: number[]) =>
     buf.set(bytes, (at & 0x7fff) + ((at >> 16) & 0x3f) * 0x8000)
-  const value = (s: Store) => (s === 'id' ? [0x8a] : s === 'offset' ? [0x8a, 0x38, 0xe9, 0x07] : [])
-  const tail = (code: number, cell: number) => [
+  const value = (s: Store) => (s === 'id' ? [0x8a] : s === 'offset' ? [0x8a, 0x18, 0x69, 0xf9] : [])
+  const tail = (code: number, cell: number): Item[] => [
     ...value(plan.store?.[code] ?? 'id'),
-    0x8d,
+    0x8f,
     cell & 0xff,
     cell >> 8,
+    0x00,
     ...(plan.afterStore ?? [RTS]),
   ]
-  const [shoot, gen, scroll] = [
-    tail(SHOOT, SHOOT_CELL),
-    tail(GEN, GEN_CELL),
-    tail(SCROLL, SCROLL_CELL),
-  ]
-  const jump = (ROUTINE & 0xffff) + 6 // the mirror's jump lands on the lookup, which starts right after it
-  const head = [0xa5, 0x14, ...(plan.mirror ? [0x5c, jump & 0xff, jump >> 8, 0x82] : [])]
-  const normal = plan.normal ?? [RTS]
-  const lookup = [0xa0, 0x03, 0xb7, 0xce, 0xaa, 0xbf, TABLE & 0xff, (TABLE >> 8) & 0xff, 0x02]
-  const tests = (code: number, to: number) => [0xc9, code, 0xf0, to]
-  const base = lookup.length + 12 + normal.length // the first tail starts after three tests and the normal path
-  const at = [base, base + shoot.length, base + shoot.length + gen.length]
-  const branches = [SHOOT, GEN, SCROLL].flatMap((code, i) => tests(code, at[i]! - (lookup.length + 4 * (i + 1)))) // prettier-ignore
+  const jump = (ROUTINE & 0xffff) + 6 // the mirror's jump lands on the next byte after it
+  const lookup = (table: number): Item[] => [0xbd, table & 0xff, table >> 8]
+  const code = assemble(
+    plan.code ?? [
+      0xa5,
+      0x14, // the opening the call site's target must have
+      ...(plan.mirror ? [0x5c, jump & 0xff, jump >> 8, 0x82] : []),
+      0xe0,
+      0x00,
+      BNE_OP,
+      'ret',
+      0xc0,
+      0x00,
+      BNE_OP,
+      'ret', // stale X, stale Y
+      0xaf,
+      0x00,
+      0x00,
+      0x70,
+      BNE_OP,
+      'ret',
+      0xad,
+      0x00,
+      0x0f,
+      BNE_OP,
+      'ret',
+      0xee,
+      0x00,
+      0x0f, // SRAM and WRAM latches
+      0xa5,
+      0x55,
+      0xc9,
+      0x01,
+      BNE_OP,
+      'ret', // the boundary seed
+      0xa5,
+      0xce,
+      0x85,
+      0xe0,
+      0xa5,
+      0xcf,
+      0x85,
+      0xe1,
+      0xa5,
+      0xd0,
+      0x85,
+      0xe2, // a copy of the list pointer
+      0xa0,
+      0x04,
+      0xb7,
+      0xe0,
+      0xc9,
+      0xff,
+      BNE_OP,
+      'ret', // the list end
+      0xa0,
+      0x03,
+      0xb7,
+      0xe0,
+      0xaa, // the id
+      ...(plan.bit3
+        ? [
+            0xa0,
+            0x01,
+            0xb7,
+            0xe0,
+            0x29,
+            0x08,
+            BEQ_OP,
+            'plain',
+            ...lookup(TABLE_BIT3),
+            BRA_OP,
+            'go',
+            { label: 'plain' },
+          ]
+        : []),
+      ...lookup(TABLE),
+      { label: 'go' },
+      0xc9,
+      SHOOT,
+      BEQ_OP,
+      'shoot',
+      0xc9,
+      GEN,
+      BEQ_OP,
+      'gen',
+      0xc9,
+      SCROLL,
+      BEQ_OP,
+      'scroll',
+      ...(plan.normal ?? NORMAL_PATH),
+      { label: 'shoot' },
+      ...tail(SHOOT, plan.shootCell ?? SHOOT_SLOTS + 2),
+      { label: 'gen' },
+      ...tail(GEN, GEN_CELL),
+      { label: 'scroll' },
+      ...tail(SCROLL, SCROLL_CELL),
+      { label: 'ret' },
+      RTS,
+    ],
+  )
   put(SITE, [0x20, ROUTINE & 0xff, (ROUTINE >> 8) & 0xff])
   put(ROUTINE, new Array(0x100).fill(0x4b)) // filler after the code, never run
-  put(ROUTINE, [...head, ...lookup, ...branches, ...normal, ...shoot, ...gen, ...scroll])
+  put(ROUTINE, code)
   put(
     TABLE,
     Array.from({ length: 256 }, (_, id) => (plan.classes ?? BANDS)(id)),
+  )
+  put(
+    TABLE_BIT3,
+    Array.from({ length: 256 }, (_, id) => (plan.bit3 ?? BANDS)(id)),
   )
   edit(put)
   return RomFile.fromBytes('x.sfc', buf)
@@ -324,7 +443,16 @@ const reasonOf = (rom: RomFile) => {
 }
 /** Class codes with a run of ids moved: the shooter ids in two pieces, a generator band below the shooters, or a hole in the scroll ids. */
 const withGap = (id: number) => (id === 0x32 ? NORMAL : BANDS(id))
-const generatorsFirst = (id: number) => (id >= 0x10 && id < 0x20 ? GEN : id >= 0x30 && id < 0x34 ? SHOOT : BANDS(id) === GEN ? NORMAL : BANDS(id)) // prettier-ignore
+const generatorsFirst = (id: number) =>
+  id >= 0x10 && id < 0x20
+    ? GEN
+    : id >= 0x30 && id < 0x34
+      ? SHOOT
+      : BANDS(id) === GEN
+        ? NORMAL
+        : BANDS(id)
+/** A single generator id where the band should be. */
+const oneGenerator = (id: number) => (id === 0x60 ? GEN : BANDS(id) === GEN ? NORMAL : BANDS(id))
 const scrollHole = (id: number) => (id === 0xc0 ? NORMAL : BANDS(id))
 
 describe('LoadClass runs the loader and reads the class from what it writes', () => {
@@ -346,8 +474,14 @@ describe('LoadClass runs the loader and reads the class from what it writes', ()
     expect(r.of(id)).toBe(want)
   })
 
+  it('a run starts from a reset machine: no X, Y, SRAM or WRAM left by the run before', () => {
+    // The routine returns before reading the id when any of them is stale, which makes the table unavailable.
+    expect(reasonOf(cart())).toBe('ok')
+  })
+
   it('a value that steps with the id from a constant offset is accepted', () => {
-    expect(reasonOf(cart({ store: { [SCROLL]: 'offset', [GEN]: 'offset', [SHOOT]: 'offset' } }))).toBe('ok') // prettier-ignore
+    const offset = { [SCROLL]: 'offset', [GEN]: 'offset', [SHOOT]: 'offset' } as const
+    expect(reasonOf(cart({ store: offset }))).toBe('ok')
   })
 
   it('a return through the other bank mirror counts as a return', () => {
@@ -356,32 +490,132 @@ describe('LoadClass runs the loader and reads the class from what it writes', ()
 
   it.each([
     ['the call site is not a JSR', noLoader(), /does not call the level loader/],
-    ['the target does not open with a direct-page load', cart({}, put => put(ROUTINE, [0xea])), /does not open the way/], // prettier-ignore
+    [
+      'the target does not open with a direct-page load',
+      cart({}, put => put(ROUTINE, [0xea])),
+      /does not open the way/,
+    ],
     ['a normal id hits BRK', cart({ normal: [0x00] }), /id \$00: BRK executed/],
     [
       'a normal id leaves ROM',
       cart({ normal: [0x5c, 0x00, 0x00, 0x7e] }),
       /id \$00: execution left ROM/,
     ],
-    ['a normal id never returns', cart({ normal: [0x80, 0xfe] }), /id \$00: did not return within/],
+    [
+      'a normal id runs past the step cap',
+      cart({ normal: [...LOOP_100K, ...NORMAL_PATH] }),
+      /id \$00: did not return within 50000 steps/,
+    ],
     [
       'a normal id returns with the stack off',
       cart({ normal: [0x48, RTS] }),
       /id \$00: returned with the stack/,
     ],
-    ['a stray pop in the mirror bank keeps running', cart({ mirror: true, normal: [0xc2, 0x20, 0x68, 0xea, RTS] }), /id \$00: returned with the stack/], // prettier-ignore
+    [
+      'a stray pop in the mirror bank keeps running',
+      cart({ mirror: true, normal: [0xc2, 0x20, 0x68, 0xea, RTS] }),
+      /id \$00: returned with the stack/,
+    ],
+    [
+      'a return to the wrong bank that is not a mirror',
+      cart({ normal: [0x5c, 0x00, 0x95, 0x03] }, put => put(0x039500, [RTS])),
+      /id \$00: returned with the stack or the bank wrong/,
+    ],
+    [
+      'a mirror return with the stack off',
+      cart({ mirror: true, normal: [0xf4, 0xff, 0x7e, RTS] }),
+      /id \$00: returned with the stack or the bank wrong/,
+    ],
+    [
+      'the routine returns at once',
+      cart({ code: [0xa5, 0x14, RTS] }),
+      /without reading the list entry/,
+    ],
+    [
+      'every id stores to one cell',
+      cart({ classes: () => SCROLL }),
+      /do not tell routed ids from sprites/,
+    ],
+    ['no id is routed', cart({ classes: () => NORMAL }), /do not tell routed ids from sprites/],
     ['the shooter ids have a gap', cart({ classes: withGap }), /shooter ids are not one run/],
-    ['the generators come before the shooters', cart({ classes: generatorsFirst }), /shooter ids do not come after|generator ids do not come after/], // prettier-ignore
+    [
+      'the generators come before the shooters',
+      cart({ classes: generatorsFirst }),
+      /(shooter|generator) ids do not come after/,
+    ],
     ['the scroll ids have a hole', cart({ classes: scrollHole }), /scroll ids are not one run/],
-    ['the shooter value does not step with the id', cart({ store: { [SHOOT]: 'flat' } }), /shooter value does not step/], // prettier-ignore
-    ['the generator value does not step with the id', cart({ store: { [GEN]: 'flat' } }), /generator value does not step/], // prettier-ignore
-    ['the scroll value does not step with the id', cart({ store: { [SCROLL]: 'flat' } }), /scroll value does not step/], // prettier-ignore
+    [
+      'the shooter value does not step with the id',
+      cart({ store: { [SHOOT]: 'flat' } }),
+      /shooter value does not step/,
+    ],
+    [
+      'the generator value does not step with the id',
+      cart({ store: { [GEN]: 'flat' } }),
+      /generator value does not step/,
+    ],
+    [
+      'the scroll value does not step with the id',
+      cart({ store: { [SCROLL]: 'flat' } }),
+      /scroll value does not step/,
+    ],
+    [
+      'a generator band of one id with a flat value',
+      cart({ classes: oneGenerator, store: { [GEN]: 'flat' } }),
+      /generator ids are a single id/,
+    ],
+    ['the ROM is not LoROM', cart({}, put => put(0x00ffd5, [0x21])), /not LoROM/],
   ] as [string, RomFile, RegExp][])('unavailable when %s', (_title, rom, why) => {
     expect(reasonOf(rom)).toMatch(why)
   })
 
   it('a ROM with no loader at all is unavailable', () => {
-    expect(loadClasses(RomFile.fromBytes('x.sfc', Buffer.alloc(0x80000)))).toMatchObject({ status: 'unavailable' }) // prettier-ignore
+    const blank = RomFile.fromBytes('x.sfc', Buffer.alloc(0x80000))
+    expect(loadClasses(blank)).toMatchObject({ status: 'unavailable' })
+  })
+
+  it('a normal path of a few hundred steps is read, not cut off', () => {
+    expect(reasonOf(cart({ normal: [...LOOP_500, ...NORMAL_PATH] }))).toBe('ok')
+  })
+
+  it.each([0x1782, 0x1783, 0x1784, 0x1786, 0x1789, 0x178a, 0x178b])(
+    'a shooter store at $%s is a shooter only inside the 8 slots',
+    cell => {
+      const r = loadClasses(cart({ shootCell: cell }))
+      if (r.status !== 'ok') throw new Error(r.reason)
+      expect(r.of(0x31)).toBe(cell >= 0x1783 && cell <= 0x178a ? 'shooter' : 'normal')
+    },
+  )
+})
+
+describe('LoadClass extra bit 3', () => {
+  it('an entry with the bit set is a scroll command only when a second sweep says so', () => {
+    const r = loadClasses(cart({ bit3: id => (id >= 0xa0 ? SCROLL : NORMAL) }))
+    if (r.status !== 'ok') throw new Error(r.reason)
+    expect([0x95, 0xa0].map(id => r.of(id, true))).toEqual(['normal', 'scroll'])
+    expect([0x95, 0xa0].map(id => r.of(id))).toEqual(['scroll', 'scroll'])
+  })
+
+  it('the gate keeps an extra-bits entry the second sweep does not call a scroll command', () => {
+    const r = loadClasses(cart({ bit3: id => (id >= 0xa0 ? SCROLL : NORMAL) }))
+    if (r.status !== 'ok') throw new Error(r.reason)
+    const withBit = (id: number) => ({ ...sprite(id), raw: [0x08, 0, id] }) as LevelSprite
+    const scroll = { ok: false, reason: 'r', routed: 'scroll' } as const
+    const results = { 0x95: scroll, 0xa0: scroll }
+    const [moved, kept] = drawSprites([withBit(0x95), withBit(0xa0)], model, draw(results), undefined, r.of) // prettier-ignore
+    expect(moved).toMatchObject({ status: 'placeholder', reason: 'extraBits' })
+    expect(kept).toMatchObject({ status: 'quiet', kind: 'scroll' })
+  })
+
+  it('a second sweep whose scroll band is broken exempts nothing, and the plain table still reads', () => {
+    const r = loadClasses(cart({ bit3: scrollHole }))
+    if (r.status !== 'ok') throw new Error(r.reason)
+    expect(r.of(0xa0, true)).toBe('normal')
+    expect(r.of(0xa0)).toBe('scroll')
+  })
+
+  it('the other bands may be anything with the bit set', () => {
+    expect(reasonOf(cart({ bit3: withGap }))).toBe('ok')
   })
 })
 
@@ -402,14 +636,62 @@ describe('LoadClass caches by the bytes the runs read', () => {
     expect(loadClasses(cart())).toBe(loadClasses(cart()))
   })
 
+  it('a write to the call site on the same RomFile reads the new routine, not the cached table', () => {
+    const rom = cart({}, put => put(0x029800, [0xa5, 0x14, RTS]))
+    expect(reasonOf(rom)).toBe('ok')
+    rom.writeAt(SITE + 1, [0x00, 0x98])
+    expect(reasonOf(rom)).toMatch(/without reading the list entry/)
+  })
+
+  it('the mapper is checked on every call, ahead of the cache', () => {
+    expect(reasonOf(cart())).toBe('ok')
+    expect(reasonOf(cart({}, put => put(0x00ffd5, [0x21])))).toMatch(/not LoROM/)
+  })
+
   it('the run stops at the first write to a cell: a BRK after the store is never reached', () => {
     expect(reasonOf(cart({ afterStore: [0x00] }))).toBe('ok')
   })
 
   it('the first write decides: a later write to another cell changes nothing', () => {
-    const r = loadClasses(cart({ afterStore: [0x8d, SCROLL_CELL & 0xff, SCROLL_CELL >> 8, RTS] }))
+    const later = [0x8f, SCROLL_CELL & 0xff, SCROLL_CELL >> 8, 0x00, RTS]
+    const r = loadClasses(cart({ afterStore: later }))
     if (r.status !== 'ok') throw new Error(r.reason)
-    expect([0x31, 0x45, 0x95].map(r.of)).toEqual(['shooter', 'generator', 'scroll'])
+    expect([0x31, 0x45, 0x95].map(id => r.of(id))).toEqual(['shooter', 'generator', 'scroll'])
+  })
+})
+
+describe('the served paths apply the loader routing', () => {
+  afterEach(() => vi.restoreAllMocks())
+  /** The fixture ROM with a one-entry stream (id, flags byte) at its end, a stub level model and the stream's pointer. */
+  const served = (id: number, flags: number) => {
+    const bytes = Uint8Array.from(cart().buffer)
+    bytes.set([0, flags, 0x01, id, 0xff], 0x7ffb0)
+    vi.spyOn(SmwRom.prototype, 'getLevelSpritePointer').mockReturnValue(0x0fffb0)
+    const inputs = { vram: {}, colors: COLORS, isVertical: false, screenCount: 1 }
+    return { bytes, cache: new L1ModelCache(() => ({ ok: true, inputs }) as never) }
+  }
+
+  it('mapSprites: a scroll command with extra bits is the quiet marker, not the extra-bits box', () => {
+    const { bytes, cache } = served(0xa0, 0x08)
+    const r = mapSprites(cache, bytes, 'x.sfc', 0)
+    if (r.status !== 'ok') throw new Error(JSON.stringify(r))
+    expect(r.sprites[0]).toMatchObject({ status: 'quiet', kind: 'scroll' })
+  })
+
+  it('mapSprites: an id the loader does not route keeps the extra-bits box', () => {
+    const { bytes, cache } = served(0x70, 0x08)
+    const r = mapSprites(cache, bytes, 'x.sfc', 0)
+    if (r.status !== 'ok') throw new Error(JSON.stringify(r))
+    expect(r.sprites[0]).toMatchObject({ status: 'placeholder', reason: 'extraBits' })
+  })
+
+  it('mapSpriteFrames: a scroll command with extra bits has no picture, not an extra-bits gate', () => {
+    const { bytes, cache } = served(0xa0, 0x08)
+    expect(mapSpriteFrames(cache, bytes, 'x.sfc', 0, 0)).toMatchObject({
+      status: 'ok',
+      frames: [],
+      reason: 'it has no picture',
+    })
   })
 })
 
@@ -480,7 +762,7 @@ describe('with the plain unverified note (#1166)', () => {
     const [q, u] = r.sprites
     expect([q!.status, u!.status]).toEqual(['quiet', 'placeholder'])
     expect(r.note).toBe('Unverified: 1 sprite may not be drawn exactly as in the game.') // only the box counts
-    expect(spriteProps(q!).notes[0]).toMatch(/draws nothing on the map\.$/)
+    expect(spriteProps(q!).notes[0]).toMatch(/may only show up in play\.$/)
     expect(spriteProps(q!).notes).not.toContain(UNVERIFIED_NOTE)
     const p = spriteProps(u!)
     expect(p.notes).toContain(UNVERIFIED_NOTE)

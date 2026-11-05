@@ -22,3 +22,7 @@ Acceptance 6 outranks the mockup's fill. A transparent interior keeps the tile v
 ## Applies to
 
 The quiet marker on the map view (`map-sprites.ts`, `map-view-model.ts`); not the failure box, not the scroll arrow or purpose tiles (a follow-up under D99 item 5).
+
+## The words for a sprite that ran and drew nothing
+
+The first wording said such a sprite "runs normally, but draws nothing on the map". The app's run draws nothing for it, but a run alone on a generic seed cannot tell a sprite that only shows in play, so that claimed more than was checked. The words are now "nothing is drawn for it on the map; it may only show up in play". Shooters, generators and scroll commands keep their own words because the game's loader, not a run, decides them. [PROP]

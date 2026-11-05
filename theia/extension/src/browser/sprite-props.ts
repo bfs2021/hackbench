@@ -20,8 +20,7 @@ export const LOADING_FRAMES = 'Checking for animation frames...'
 export const animatedText = (n: number) => `Animated: ${n} frames, looping.`
 
 /** Why a sprite is drawn as a numbered marker, in words; the engine's own reason is kept when it is not one of these. */
-/** Plain-words causes by reason code; exported so a quiet marker can use a key another feature adds (#1011). */
-export const WHY_NOT_DRAWN: Record<string, string> = {
+const WHY_NOT_DRAWN: Record<string, string> = {
   extraBits:
     'It uses the extra-bits marker that custom sprites use, so vanilla art would be wrong.',
   noParts: 'Its code drew no tiles.',
@@ -144,19 +143,17 @@ export const noteTitle = (
       : undefined
 
 /** The quiet marker's tooltip and Properties line (#1011): the sprite's name, then why nothing shows. Plain words. */
-export function quietText(s: Pick<MapSpriteDto, 'kind' | 'name' | 'reason'>): string {
+export function quietText(s: Pick<MapSpriteDto, 'kind' | 'name'>): string {
   if (s.kind === 'scroll')
     return 'Scroll command: changes how the screen scrolls; it has no picture in the game'
   if (s.kind === 'shooter')
     return `${s.name ?? 'Shooter'}: fires on a timer; nothing is drawn until it does`
   if (s.kind === 'generator')
     return `${s.name ?? 'Generator'}: runs in the background; it has no picture on the map`
-  // A reason the Properties view has words for says why (for example a sprite only a player action reveals).
-  const why = s.reason ? WHY_NOT_DRAWN[s.reason] : undefined
-  if (why) return s.name ? `${s.name}: ${why}` : why
+  // The words claim only what was checked: nothing drew in the app's run, which cannot tell a sprite that shows only in play.
   return s.name
-    ? `${s.name}: runs normally, but draws nothing on the map`
-    : 'Runs normally, but draws nothing on the map'
+    ? `${s.name}: nothing is drawn for it on the map; it may only show up in play`
+    : 'Nothing is drawn for it on the map; it may only show up in play'
 }
 
 /** The engine's wording is for diagnosis and is long and technical, so the notes stay plain words and the raw text is carried apart for a tooltip or disclosure (#1166). */

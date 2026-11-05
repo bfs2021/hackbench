@@ -10,7 +10,8 @@ import { SmwRom } from '../../../src/rom/SmwRom'
 import { mapSprites } from '../../../theia/extension/src/node/map-sprites'
 import { L1ModelCache } from '../../../theia/extension/src/node/map-screen'
 import { quietText } from '../../../theia/extension/src/browser/sprite-props'
-import { VANILLA, hasRom, romPath } from '../support/corpus'
+import { loadClasses, type LoadClass } from '../../../src/rom/sprites/interp/LoadClass'
+import { MAGIC, VANILLA, freshRom, hasRom, romPath } from '../support/corpus'
 import { slow } from '../support/loadTimeout'
 
 describe.skipIf(!hasRom(VANILLA))('quiet marker on the vanilla ROM', () => {
@@ -69,4 +70,27 @@ describe.skipIf(!hasRom(VANILLA))('quiet marker on the vanilla ROM', () => {
       )
     },
   )
+})
+
+/** The game's routing by id (bank_02.asm:5290-5368): shooters 201-202, generators 203-217, scroll commands 231-255. */
+const expected = (id: number): LoadClass =>
+  id >= 231
+    ? 'scroll'
+    : id >= 203 && id < 218
+      ? 'generator'
+      : id >= 201 && id < 203
+        ? 'shooter'
+        : 'normal'
+const IDS = Array.from({ length: 256 }, (_, id) => id)
+
+describe.each([VANILLA, MAGIC])('the loader routing of %s, every id', name => {
+  describe.skipIf(!hasRom(name))('with the ROM', () => {
+    it.each(IDS)('id %i', id => {
+      const classes = loadClasses(freshRom(name))
+      if (classes.status !== 'ok') throw new Error(classes.reason)
+      expect(classes.of(id)).toBe(expected(id))
+      // With extra bit 3 set only the scroll commands stay scroll commands.
+      expect(classes.of(id, true)).toBe(expected(id) === 'scroll' ? 'scroll' : 'normal')
+    })
+  })
 })

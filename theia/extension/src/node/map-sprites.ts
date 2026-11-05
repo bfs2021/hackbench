@@ -13,7 +13,7 @@
  * the part's dx/dy: negative, off the 16 px grid, and free to spill past
  * its tile or screen, so nothing is snapped and each sprite is one bitmap
  * the view cuts per screen. A sprite the interpreter refuses or that draws
- * nothing wrong but nothing to draw (an empty run, or an id the game's loader never runs as a sprite: shooter, generator,
+ * nothing to draw (an empty run, or an id the game's loader never runs as a sprite: shooter, generator,
  * scroll command) is the quiet ring marker (#1011); a sprite the interpreter refuses or whose chars are not loaded is a
  * 16 x 16 box with its hex id and the reason, never invented art. Layer control and purpose tiles are deferred.
  *
@@ -314,7 +314,7 @@ export function drawSprites(
   draw: SpriteDrawer,
   dynamic: (note: PaletteNote) => RgbaColor[] = () => [],
   /** How the game's loader routes an id (LoadClass.ts), when readable: a routed scroll command keeps its extra bits. */
-  routedOf?: (id: number) => LoadClass,
+  routedOf?: (id: number, extraBits?: boolean) => LoadClass,
 ): MapSpriteDto[] {
   /** One sprite's bitmap from a drawer result: its parts blitted at the anchor, or the marker when it cannot be drawn. */
   const render = (s: LevelSprite, res: SpriteDrawResult): MapSpriteDto => {
@@ -401,7 +401,7 @@ export function drawSprites(
   const dtos = sprites.map((s): MapSpriteDto => {
     // Fail closed: a possibly custom sprite is never given vanilla art, and its code is not run. A scroll command is exempt:
     // the game reads those bits as its scroll data (bank_02.asm:5301-5305), and it has no art to get wrong.
-    if ((s.raw[0] ?? 0) & EXTRA_BITS && routedOf?.(s.spriteId) !== 'scroll')
+    if ((s.raw[0] ?? 0) & EXTRA_BITS && routedOf?.(s.spriteId, true) !== 'scroll')
       return placeholder(s, 'extraBits')
     const res = draw(s)
     if (res.ok) for (const c of res.children ?? []) claimed.set(c.index, { parent: s.index, res, parts: c.parts }) // prettier-ignore
@@ -1102,7 +1102,7 @@ export function spriteLayer(
   model: SpriteModel & { isVertical: boolean; screenCount: number },
   draw: SpriteDrawer,
   dynamic?: (note: PaletteNote) => RgbaColor[],
-  routedOf?: (id: number) => LoadClass,
+  routedOf?: (id: number, extraBits?: boolean) => LoadClass,
 ): Extract<MapSpritesResult, { status: 'ok' }> {
   const { w, h } = screenTiles(model.isVertical)
   const sprites = drawSprites(
@@ -1318,9 +1318,10 @@ const routedFor = (rom: RomFile) => {
  */
 export function framesGate(
   s: LevelSprite,
-  routedOf?: (id: number) => LoadClass,
+  routedOf?: (id: number, extraBits?: boolean) => LoadClass,
 ): string | undefined {
-  if (routedOf?.(s.spriteId) === 'scroll') return 'it has no picture'
+  if (routedOf?.(s.spriteId, !!((s.raw[0] ?? 0) & EXTRA_BITS)) === 'scroll')
+    return 'it has no picture'
   return (s.raw[0] ?? 0) & EXTRA_BITS ? 'extraBits' : undefined
 }
 

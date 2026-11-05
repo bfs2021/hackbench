@@ -11,24 +11,31 @@
  * returns with the stack wrong makes the whole table `status: 'unavailable'`, with the id and the reason. A return
  * through another bank's mirror of bank 2 is a return.
  *
- * Within each class the value written must step with the id (id minus a constant), each class must be one run of ids,
- * and the runs must come shooter, generator, scroll; anything else is unavailable (a hack that writes a cell for every
- * id would otherwise read as a class). Seeded: the sprite list pointer and one entry on the screen boundary, the scroll
- * direction that makes that boundary offset zero, DB = 2. Not seen: everything after the first write to a cell (a scroll
- * command's setup call leaves ROM on ids past the table), whether the game reaches the routine on a given frame, and
- * what a hook does after the cell is written. Evidence: vanilla and the Magic ROM read the same table (ids 0-200 normal,
- * 201-202 shooter, 203-217 generator, 218-230 normal, 231-255 scroll); hacks in docs/rom/map-data-mechanics.md (one
- * machine, 2026-11-05).
+ * Each run must read the entry's id before it writes or returns, and the table must hold both routed and normal ids, or it
+ * proves nothing and is unavailable. Within each class the value written must step with the id (id minus a constant),
+ * each class must be one run of at least two ids, and the runs must come shooter, generator, scroll; anything else is
+ * unavailable (a hack that writes a cell for every id would otherwise read as a class). The sweep runs twice, with extra
+ * bit 3 of the entry clear and set, because some hacks move the bands with it (measured); `of(id, true)` says only
+ * whether an entry with it set is a scroll command (else `normal`: the gate keeps it). Every run starts from a restored
+ * machine with A, X and Y zero. Seeded: the sprite list pointer and
+ * one entry on the screen boundary, the scroll direction that makes that boundary offset zero, DB = 2. Not seen:
+ * everything after the first write to a cell (a scroll command's setup call leaves ROM or unbalances the stack on some
+ * ids past the table), extra bit 2 and a vertical level (neither moved a band in the measured ROMs), whether the game
+ * reaches the routine on a given frame, and what a hook does after the cell is written. Evidence: vanilla and the Magic
+ * ROM read the same table (ids 0-200 normal, 201-202 shooter, 203-217 generator, 218-230 normal, 231-255 scroll, bit 3
+ * clear); hacks in docs/rom/map-data-mechanics.md (one machine, 2026-11-05).
  */
 import { Refusal, SENTINEL, callSubroutine, type CallResult } from '../../cpu/call'
 import type { Cpu65816 } from '../../cpu/Cpu65816'
 import type { RomFile } from '../../RomFile'
+import { mapperProblem } from './Guards'
 import { RunCache, smwMachine } from './Machine'
 
 export type LoadClass = 'normal' | 'shooter' | 'generator' | 'scroll'
 
 export type LoadClasses =
-  { status: 'ok'; of: (id: number) => LoadClass } | { status: 'unavailable'; reason: string }
+  | { status: 'ok'; of: (id: number, extraBits?: boolean) => LoadClass }
+  | { status: 'unavailable'; reason: string }
 
 /** The call in the sprite main loop (bank_02.asm:1410): one JSR opcode, whose operand is the routine. */
 const CALL_SITE = 0x028b1d
@@ -52,6 +59,9 @@ const LIST_AT = 0xe000
 const WRAM_BANK = 0x7e
 const BOUNDARY_ZERO = 1
 const LIST_END = 0xff
+/** The entry's flags byte holds the extra bits; bit 3 is the one that moves ids on some hacks (measured). */
+const EXTRA_BIT_3 = 0x08
+const [FLAGS_AT, ID_AT, END_AT] = [1, 3, 4]
 
 /** One id's verdict: its class and the value the decisive write stored (0 for a normal one). */
 interface Row {
@@ -99,15 +109,19 @@ const whyNot = (r: CallResult): string =>
       ? `did not return within ${STEP_CAP} steps`
       : 'returned with the stack or the bank wrong'
 
-/** The first thing wrong with the bands the 256 runs gave, or null: one run of ids per class, in order, each value stepping with its id. */
-function bandsProblem(rows: Row[]): string | null {
+/** The first thing wrong with the bands the 256 runs gave, or null: some routed and some normal ids, then per class one run of at least two ids, in order, each value stepping with its id. */
+function bandsProblem(rows: Row[], classes: readonly LoadClass[]): string | null {
+  const routed = rows.filter(r => r.cls !== 'normal').length
+  if (routed === 0 || routed === rows.length) return 'the runs do not tell routed ids from sprites'
   let after = -1
-  for (const cls of ['shooter', 'generator', 'scroll'] as const) {
+  for (const cls of classes) {
     const ids = rows.flatMap((r, id) => (r.cls === cls ? [id] : []))
     if (!ids.length) continue
     const [first, last] = [ids[0]!, ids[ids.length - 1]!]
     if (last - first + 1 !== ids.length) return `the ${cls} ids are not one run`
     if (first <= after) return `the ${cls} ids do not come after the earlier class`
+    // One id has nothing to step against, so a single flat value could be any cell write.
+    if (ids.length < 2) return `the ${cls} ids are a single id, so its value cannot be checked`
     if (ids.some(id => rows[id]!.value - id !== rows[first]!.value - first))
       return `the ${cls} value does not step with the id`
     after = last
@@ -119,28 +133,27 @@ const cache = new RunCache<LoadClasses>()
 
 /** The game's own routing of a sprite-list id, read from this ROM by running its routine (or why it cannot be read). Cached by the ROM bytes the runs read. */
 export function loadClasses(rom: RomFile): LoadClasses {
+  // Neither check is a bus read, so neither can be left to the cache's key.
   const entry = entryOf(rom)
   if (typeof entry === 'string') return fail(entry)
+  const mapper = mapperProblem(rom)
+  if (mapper) return fail(mapper)
   const key = `loadClasses ${entry}`
   return cache.lookup(rom, key) ?? run(rom, entry, key)
 }
 
-/** Runs the routine for each id on one machine, WRAM restored between ids, and remembers the verdict. */
+/** Runs the routine for each id, with and without extra bit 3, on one machine put back between runs, and remembers the verdict. */
 function run(rom: RomFile, entry: number, key: string): LoadClasses {
-  let machine: ReturnType<typeof smwMachine>
-  try {
-    machine = smwMachine(rom)
-  } catch (e) {
-    if (e instanceof Refusal) return fail(e.message)
-    throw e
-  }
-  const { bus, cpu } = machine
+  const { bus, cpu } = smwMachine(rom)
   const w = bus.wram
   w[SCROLL_DIR] = BOUNDARY_ZERO
   w.set([LIST_AT & 0xff, LIST_AT >> 8, WRAM_BANK], SPRITE_DATA_PTR)
-  w[LIST_AT + 4] = LIST_END // the list is: a header byte, then y, x and id, then the end mark
-  const seeded = w.slice()
-  const seen: { row: Row | null } = { row: null }
+  w[LIST_AT + END_AT] = LIST_END // the list is: a header byte, then flags, x and id, then the end mark
+  const seeded = bus.snapshot()
+  const seen: { row: Row | null; read: boolean } = { row: null, read: false }
+  bus.onRead = off => {
+    if (off === LIST_AT + ID_AT) seen.read = true
+  }
   bus.onWramWrite = (off, value) => {
     const cls = classOfCell(off)
     if (!cls) return
@@ -148,25 +161,40 @@ function run(rom: RomFile, entry: number, key: string): LoadClasses {
     throw new Refusal('decided') // the class is known at the first write; what follows is not run
   }
   cache.track(bus, rom)
-  const rows: Row[] = []
-  let problem: string | null = null
-  for (let id = 0; id < 256 && !problem; id++) {
-    w.set(seeded)
-    w[LIST_AT + 3] = id
-    seen.row = null
-    const r = callSubroutine(cpu, entry, {
-      kind: 'jsr',
-      maxSteps: STEP_CAP,
-      regs: { db: ENTRY_DB },
-    })
-    if (seen.row) rows.push(seen.row)
-    else if (returned(r, cpu)) rows.push({ cls: 'normal', value: 0 })
-    else problem = `id $${id.toString(16).toUpperCase().padStart(2, '0')}: ${whyNot(r)}`
+  /** The 256 rows for entries with `flags` set, or why the runs prove nothing. */
+  const sweep = (flags: number, classes: readonly LoadClass[]): Row[] | string => {
+    const rows: Row[] = []
+    for (let id = 0; id < 256; id++) {
+      bus.restore(seeded) // WRAM, SRAM and the multiply units: no run sees an earlier run's state
+      w[LIST_AT + FLAGS_AT] = flags
+      w[LIST_AT + ID_AT] = id
+      seen.row = null
+      seen.read = false
+      const regs = { db: ENTRY_DB, a: 0, x: 0, y: 0 }
+      const r = callSubroutine(cpu, entry, { kind: 'jsr', maxSteps: STEP_CAP, regs })
+      const at = `id $${id.toString(16).toUpperCase().padStart(2, '0')}`
+      // A run that never read the entry decided nothing about it, whatever it wrote or returned.
+      if (!seen.read) return `${at}: the routine finished without reading the list entry`
+      if (seen.row) rows.push(seen.row)
+      else if (returned(r, cpu)) rows.push({ cls: 'normal', value: 0 })
+      else return `${at}: ${whyNot(r)}`
+    }
+    return bandsProblem(rows, classes) ?? rows
   }
-  problem ??= bandsProblem(rows)
-  const classes = rows.map(r => r.cls)
-  const result: LoadClasses = problem
-    ? fail(problem)
-    : { status: 'ok', of: id => classes[id] ?? 'normal' }
+  // With bit 3 set only the scroll band is read: the gate needs nothing else, and the other bands may not step on hacks.
+  const plain = sweep(0, ['shooter', 'generator', 'scroll'])
+  const bit3 = sweep(EXTRA_BIT_3, ['scroll'])
+  const result: LoadClasses =
+    typeof plain === 'string'
+      ? fail(plain)
+      : {
+          status: 'ok',
+          of: (id, extraBits) =>
+            extraBits
+              ? typeof bit3 !== 'string' && bit3[id]?.cls === 'scroll'
+                ? 'scroll'
+                : 'normal'
+              : (plain[id]?.cls ?? 'normal'),
+        }
   return cache.store(rom, key, bus, result)
 }
