@@ -277,7 +277,6 @@ function cart(
   plan: Plan = {},
   edit: (put: (at: number, b: number[]) => void) => void = () => undefined,
 ): RomFile {
-  // prettier-ignore
   const buf = Buffer.alloc(0x80000)
   buf[0x7fd5] = 0x20
   const put = (at: number, bytes: number[]) =>
@@ -313,6 +312,11 @@ function cart(
   edit(put)
   return RomFile.fromBytes('x.sfc', buf)
 }
+/** A cart whose sprite main loop no longer calls the loader, so its routing cannot be read. */
+const noLoader = () => cart({}, put => put(SITE, [0xea]))
+/** An empty seed and a one-screen horizontal level: all interpDrawer needs when the run is a spy. */
+const seedFor = () => withSeed({ loaded: new Uint8Array(0x2000) })
+const geometry = { isVertical: false, screenCount: 1 }
 /** The unavailable reason for a ROM's loader read, or 'ok'. */
 const reasonOf = (rom: RomFile) => {
   const r = loadClasses(rom)
@@ -351,11 +355,7 @@ describe('LoadClass runs the loader and reads the class from what it writes', ()
   })
 
   it.each([
-    [
-      'the call site is not a JSR',
-      cart({}, put => put(SITE, [0xea])),
-      /does not call the level loader/,
-    ],
+    ['the call site is not a JSR', noLoader(), /does not call the level loader/],
     ['the target does not open with a direct-page load', cart({}, put => put(ROUTINE, [0xea])), /does not open the way/], // prettier-ignore
     ['a normal id hits BRK', cart({ normal: [0x00] }), /id \$00: BRK executed/],
     [
@@ -414,8 +414,6 @@ describe('LoadClass caches by the bytes the runs read', () => {
 })
 
 describe('the runner routes by what LoadClass read, with no fallback to the game bands', () => {
-  const seedFor = () => withSeed({ loaded: new Uint8Array(0x2000) })
-  const geometry = { isVertical: false, screenCount: 1 }
   /** A real interpDrawer over the fixture ROM with a spy run that records which ids ran as sprites. */
   const drawerFor = (rom: RomFile, ran: number[]) =>
     interpDrawer(
@@ -440,10 +438,7 @@ describe('the runner routes by what LoadClass read, with no fallback to the game
 
   it('an unreadable loader routes nothing: the game bands are not assumed', () => {
     const ran: number[] = []
-    const d = drawerFor(
-      cart({}, put => put(SITE, [0xea])),
-      ran,
-    )
+    const d = drawerFor(noLoader(), ran)
     d(sprite(0xe8))
     d(sprite(0xc9))
     expect(ran).toEqual([0xe8, 0xc9])
@@ -456,23 +451,15 @@ describe('review findings (#1273)', () => {
   })
 
   it('an empty run whose loader routing could not be read is unverified (so it keeps the box), unless it can be read', () => {
-    const seedFor = () => withSeed({ loaded: new Uint8Array(0x2000) })
-    const geometry = { isVertical: false, screenCount: 1 }
     const empty = () => runModel({ emptyReason: 'drew no OAM tile' })
-    const unreadable = interpDrawer(
-      cart({}, put => put(SITE, [0xea])),
-      0,
-      geometry,
-      empty,
-      seedFor,
-    )
+    const unreadable = interpDrawer(noLoader(), 0, geometry, empty, seedFor)
     const r = unreadable(sprite(0x70))
     expect(r).toMatchObject({ ok: false, empty: true, unverified: expect.stringContaining('routing could not be read') }) // prettier-ignore
     expect(drawSprites([sprite(0x70)], model, () => r, undefined, undefined)[0]!.status).toBe(
       'placeholder',
     )
     // A reason already there is kept, not replaced.
-    const kept = interpDrawer(cart({}, put => put(SITE, [0xea])), 0, geometry, () => runModel({ emptyReason: 'x', unverifiedReason: 'seed lacks state' }), seedFor)(sprite(0x70)) // prettier-ignore
+    const kept = interpDrawer(noLoader(), 0, geometry, () => runModel({ emptyReason: 'x', unverifiedReason: 'seed lacks state' }), seedFor)(sprite(0x70)) // prettier-ignore
     expect(kept).toMatchObject({ unverified: expect.stringContaining('seed lacks state') })
     // Readable routing: the empty run is verified, so quiet.
     const readable = interpDrawer(cart(), 0, geometry, empty, seedFor)(sprite(0x70))
