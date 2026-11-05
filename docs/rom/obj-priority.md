@@ -164,7 +164,8 @@ stream index) picks the winner, as before #795; the game's OAM slot
 assignment between sprites is not modelled.
 
 A marker (a sprite the interpreter refused) has no OAM entry and keeps
-priority 2.
+priority 2. So does the quiet marker (#1011), a ring with a clear interior;
+it is exempt from the screen door below, so the tile under it is never dimmed or dithered.
 
 ## A covered sprite pixel is not hidden (editor ruling D52, not hardware)
 

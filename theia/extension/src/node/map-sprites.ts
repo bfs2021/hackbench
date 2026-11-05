@@ -13,9 +13,9 @@
  * the part's dx/dy: negative, off the 16 px grid, and free to spill past
  * its tile or screen, so nothing is snapped and each sprite is one bitmap
  * the view cuts per screen. A sprite the interpreter refuses or that draws
- * nothing, or whose chars are not loaded, is a 16 x 16 marker with its hex id
- * and the reason, never invented art. That includes the non-visual sprites
- * (auto-scroll, generators, layer control): their real treatment is deferred.
+ * nothing wrong but nothing to draw (an empty run, or an id the game's loader never runs as a sprite: shooter, generator,
+ * scroll command) is the quiet ring marker (#1011); a sprite the interpreter refuses or whose chars are not loaded is a
+ * 16 x 16 box with its hex id and the reason, never invented art. Layer control and purpose tiles are deferred.
  *
  * THE SERVED PATH IS THE INTERPRETER (#585): `interpDrawer` runs the sprite's
  * own MAIN from the ROM on the 65816 core (src/rom/sprites/interp/)
@@ -72,6 +72,7 @@ import {
   type FlameRoutines,
 } from '../../../../src/rom/sprites/interp/CastleFlames'
 import { levelSeed } from '../../../../src/rom/sprites/interp/LevelLoader'
+import { loadClasses, type LoadClass } from '../../../../src/rom/sprites/interp/LoadClass'
 import { neighboursOf } from '../../../../src/rom/sprites/interp/Neighbours'
 import {
   EERIES_COUNT,
@@ -173,7 +174,15 @@ export type SpriteDrawResult =
       note?: string
     })
   | Extract<EngineResult, { ok: false }>
-  | { ok: false; reason: string; unverified?: string }
+  | {
+      ok: false
+      reason: string
+      unverified?: string
+      /** The run was fine and drew nothing (every pass empty, or INIT removed the sprite): a quiet marker, not a failure. */
+      empty?: boolean
+      /** The game's own load routine sends this id to a shooter, generator or scroll path, not a sprite slot: nothing to draw. */
+      routed?: Exclude<LoadClass, 'normal'>
+    }
 
 /** A part with its OAM priority (attribute bits 5:4); the table engine's parts have none and draw at 2. */
 export type DrawPart = EnginePart & { priority?: number }
@@ -203,6 +212,41 @@ function marker(id: number): Uint8ClampedArray {
   return out
 }
 
+/**
+ * The quiet marker (#1011): a ring with a clear interior and a center dot, for a sprite that ran fine (or that the game never runs
+ * as a sprite) and has no picture. Every other pixel is transparent so the tile beneath shows; each light pixel has a dark
+ * neighbour edge so it reads on light and dark art. Unlike the failure box it is not filled.
+ */
+const RING_LIGHT: RgbaColor = [235, 235, 235, 255]
+const RING_EDGE: RgbaColor = [40, 40, 40, 255]
+function ring(): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(MARK * MARK * 4)
+  for (let y = 0; y < MARK; y++) {
+    for (let x = 0; x < MARK; x++) {
+      const d = Math.hypot(x - 7.5, y - 7.5)
+      const c = d < 1.5 ? RING_LIGHT : d < 2.5 ? RING_EDGE : d >= 6 && d < 7 ? RING_LIGHT : d >= 7 && d < 8 ? RING_EDGE : undefined // prettier-ignore
+      if (c) out.set(c, (y * MARK + x) * 4)
+    }
+  }
+  return out
+}
+const RING = base64(ring())
+
+function quiet(s: LevelSprite, reason: string, kind: LoadClass | undefined): MapSpriteDto {
+  const [x, y] = [pixelX(s), s.y * TILE]
+  return {
+    index: s.index,
+    id: s.spriteId,
+    x,
+    y,
+    box: { x0: x, y0: y, x1: x + MARK, y1: y + MARK },
+    rgba: RING,
+    status: 'quiet',
+    reason,
+    ...(kind && kind !== 'normal' ? { kind } : {}),
+  }
+}
+
 function placeholder(s: LevelSprite, reason: string, unverified?: string): MapSpriteDto {
   const [x, y] = [pixelX(s), s.y * TILE]
   return {
@@ -218,8 +262,9 @@ function placeholder(s: LevelSprite, reason: string, unverified?: string): MapSp
   }
 }
 
-const base64 = (b: Uint8ClampedArray) =>
-  Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString('base64')
+function base64(b: Uint8ClampedArray): string {
+  return Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString('base64')
+}
 
 /** The part's pixels into `out` and its priority into `prio` (bitmap origin `ox, oy`), color index 0 left clear. */
 function blit(
@@ -255,6 +300,9 @@ export function drawSprites(
 ): MapSpriteDto[] {
   /** One sprite's bitmap from a drawer result: its parts blitted at the anchor, or the marker when it cannot be drawn. */
   const render = (s: LevelSprite, res: SpriteDrawResult): MapSpriteDto => {
+    // The one place a quiet verdict is made, on the final result (after any step that may still reveal a drawing): a run that
+    // ended empty, or an id the game's loader never runs as a sprite. Everything else that did not draw stays the failure box.
+    if (!res.ok && (('empty' in res && res.empty) || ('routed' in res && res.routed))) return quiet(s, res.reason, 'routed' in res ? res.routed : undefined) // prettier-ignore
     if (!res.ok) return placeholder(s, 'reason' in res ? res.reason : res.failure.kind, 'unverified' in res ? res.unverified : undefined) // prettier-ignore
     if (res.parts.length === 0) return placeholder(s, 'noParts')
     let unverified = 'unverified' in res ? res.unverified : undefined
@@ -321,9 +369,10 @@ export function drawSprites(
   // Sprites a parent drew (the $9B a $9C picks up, #1049) are part of the parent's picture, not unexplained.
   const claimed = new Map<number, { parent: number; res: SpriteDrawResult; parts: DrawPart[] }>()
   const dtos = sprites.map((s): MapSpriteDto => {
-    // Fail closed: a possibly custom sprite is never given vanilla art.
-    if ((s.raw[0] ?? 0) & EXTRA_BITS) return placeholder(s, 'extraBits')
     const res = draw(s)
+    // Fail closed: a possibly custom sprite is never given vanilla art. A scroll command is exempt: the game reads those
+    // bits as its scroll data (bank_02.asm:5301-5305), and it has no art to get wrong.
+    if ((s.raw[0] ?? 0) & EXTRA_BITS && !(!res.ok && 'routed' in res && res.routed === 'scroll')) return placeholder(s, 'extraBits') // prettier-ignore
     if (res.ok) for (const c of res.children ?? []) claimed.set(c.index, { parent: s.index, res, parts: c.parts }) // prettier-ignore
     return render(s, res)
   })
@@ -331,7 +380,8 @@ export function drawSprites(
   // tiles the parent drew for it as its area and no marker. The view hit-tests it and does not paint it again.
   return dtos.map((d, n) => {
     const c = claimed.get(d.index)
-    if (!c || d.status !== 'placeholder' || d.reason === 'extraBits') return d
+    if (!c || (d.status !== 'placeholder' && d.status !== 'quiet') || d.reason === 'extraBits')
+      return d
     const own = render(sprites[n]!, { ...c.res, parts: c.parts } as SpriteDrawResult)
     return own.status === 'drawn' ? { ...own, x: d.x, y: d.y, drawnBy: c.parent } : d
   })
@@ -444,7 +494,13 @@ export function modelResult(m: RunModel): SpriteDrawResult {
   if (m.refusal) return { ok: false, reason: `refused: ${m.refusal}`, ...u }
   const pass = m.chosen === undefined ? undefined : m.passes[m.chosen]
   const uploads = m.chosen === undefined ? undefined : m.uploads?.[m.chosen]
-  if (!m.anchor || !pass) return { ok: false, reason: m.emptyReason ?? 'drew no tile', ...u }
+  if (!m.anchor || !pass)
+    return {
+      ok: false,
+      reason: m.emptyReason ?? 'drew no tile',
+      ...(m.emptyReason ? { empty: true } : {}),
+      ...u,
+    }
   // The at-rest picture of a sprite whose INIT shifts it is drawn where INIT left it; its list position is the stored tile.
   const stored = m.shifted
     ? { stored: { x: m.anchor.rawX, y: m.anchor.rawY }, afterInit: m.initAt }
@@ -689,6 +745,7 @@ export function interpRunner(
 ): (sprite: LevelSprite) => SpriteRun {
   // The loader runs once per map, not per sprite.
   const base = seedFor(rom, index)
+  const classes = loadClasses(rom)
   // Mario's start is what the ROM-run loader left in $94/$96 (the entrance it ran); the
   // table re-derivation is only for a generic seed, which has no loader image.
   const w = base.loaded
@@ -715,6 +772,10 @@ export function interpRunner(
     if (s.spriteId === FIVE_EERIES) return { direct: eeriesResult(rom, seed(camera), s, model.isVertical, eeriesRoutines) } // prettier-ignore
     if (s.spriteId === THREE_PLATFORMS) return { direct: platformsResult(rom, seed(camera), s, model.isVertical, platformRoutines) } // prettier-ignore
     if (s.spriteId === TORPEDO_LAUNCHER_ID) return { direct: launcherResult(rom, seed(camera)) } // prettier-ignore
+    // The game's loader never runs a shooter, generator or scroll command as a sprite (LoadClass.ts), so there is no sprite
+    // code to run for it. A class that cannot be read leaves the id to the sprite path (and its refusal).
+    const routed = classes.ok ? classes.of(s.spriteId) : 'normal'
+    if (routed !== 'normal') return { direct: { ok: false, reason: `the game's loader treats it as a ${routed}, not a sprite`, routed } } // prettier-ignore
     // The map's own loader placed it at map load (D156): it also spawns at the map-load camera.
     const opening = !!w && s.index >= 0 && s.index < 128 && !!w[SPRITE_LOAD_STATUS + s.index]
     let m = run(rom, s.spriteId, seed(camera, { opening }))

@@ -124,12 +124,23 @@ export function shiftNote(
   return `${cause}, so the map draws it ${there}, as the game does. The highlighted tile is where the map stores it.`
 }
 
+/** The quiet marker's tooltip and Properties line (#1011): the sprite's name, then why nothing shows. Plain words. */
+export function quietText(s: Pick<MapSpriteDto, 'kind' | 'name'>): string {
+  if (s.kind === 'scroll')
+    return 'Scroll command: changes how the screen scrolls; it has no picture in the game'
+  if (s.kind === 'shooter' && s.name)
+    return `${s.name}: fires on a timer; nothing is drawn until it does`
+  return s.name
+    ? `${s.name}: runs normally, but draws nothing on the map`
+    : 'Runs normally, but draws nothing on the map'
+}
+
 export function spriteProps(s: MapSpriteDto): SpriteProps {
   const parts = s.status === 'drawn' && s.parts ? s.parts : null
   const notes: string[] = []
   if (s.status === 'placeholder') {
     notes.push(`Not drawn: ${notDrawnText(s.reason)}`)
-  }
+  } else if (s.status === 'quiet') notes.push(quietText(s) + '.')
   if (s.unverified) notes.push(`Unverified: ${s.unverified}.`)
   const shift = shiftNote(s)
   if (shift) notes.push(shift)
