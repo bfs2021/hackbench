@@ -274,7 +274,11 @@ ring and center dot at the placed spot, every other pixel clear; `kind`
 (`shooter`, `generator`, `scroll`) says which loader path routed it, absent for
 a sprite that ran and drew nothing. `spriteDoors` gives its pixels door id 0 (never
 dithered), `spriteAt` hits its whole box, clear interior included, and the hover
-and Properties words come from `quietText` (`sprite-props.ts`). The failure box
+and Properties words come from `quietText` (`sprite-props.ts`). The loader's
+routing comes from `loadClasses` (`LoadClass.ts`), which runs the ROM's own
+sprite-list routine once per ROM version and caches by the bytes read, so the
+working copy's edits invalidate it; when it cannot read the ROM the routing is
+`unavailable` and an empty run keeps the framed box, marked unverified. The failure box
 (`placeholder`) stays for refusals, unloaded chars, extra bits and no descriptor.
 Hover (#879): the widget finds the sprite under the pointer with `doorIdAt`
 (the door id at the native pixel) and passes it as `lift` to `composeScreen`

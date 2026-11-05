@@ -7,7 +7,7 @@ import type { LevelSprite } from '../../../src/rom/LevelParser'
 import { RomFile } from '../../../src/rom/RomFile'
 import { composeScreen } from '../../../src/rom/model/ColorMath'
 import { FALLBACK_SCREENS } from '../../../src/rom/model/ScreenPlanes'
-import { loadClasses, SHAPES, type LoadClass } from '../../../src/rom/sprites/interp/LoadClass'
+import { loadClasses, type LoadClass } from '../../../src/rom/sprites/interp/LoadClass'
 import { withSeed } from '../../../src/rom/sprites/interp/SpriteSeed'
 import type { SpriteModel } from '../../../src/rom/sprites/interp/SpriteRunner'
 import {
@@ -248,62 +248,69 @@ describe('plain words', () => {
   })
 })
 
-// A bank-2 window carrying only the loader's opcode shapes, with operands unlike the game's. The offsets are
-// the blocks' places; the hops between them are real branch displacements.
-/** The branch displacement byte from `at` to `to`. */
-const rel = (at: number, to: number) => (to - (at + 2)) & 0xff
-// The routine's start (checked, so a hook patched over it reads unavailable), then the scroll test.
-const S = 0x100
-const C = 0xc0 // the loop that calls the routine (unlike operands); its branch must land on S
-const LN = C + 24 // where the entry's other two skips land: the loop's step to the next sprite
-const RET = 0xa0 // where the entry first skip and the loop end branch land: a return
-const GUARD = 0x130 // where the scroll guard lands: the branch on to the next sprite
-const ENTRY = [0xd0, rel(S, RET), 0xb7, 0x0a, 0x29, 0xf0, 0xc5, 0x00, 0xd0, rel(S + 8, LN), 0xbd, 0x00, 0x12, 0xd0, rel(S + 13, LN), 0x86, 0x02, 0xfe, 0x00, 0x12, 0xc8, 0xb7, 0x0a, 0x85, 0x05, 0x88] // prettier-ignore
-const SC = S + ENTRY.length // the scroll CMP itself
-const E = 0x140 // the Eeries test
-const P = 0x150 // the platforms test
-const G = 0x160 // the generator test
-const AFTER = G + 20 // where the generator's upper-bound branch lands: the test for the cluster spawners, just past its block
-const ST9 = AFTER + 16 // the carried-shell path the cluster test's below-range branch lands on
-const SH = AFTER + 20 // the shooter test: right after those two blocks
-const LS = 0x1000 // the shooter loader's opening, which the shooter test's call (operand $9000) must reach
-const NEXT = 0x138 // where both generator and shooter paths go on: the branch to the next sprite
-// The Eeries/platforms test shape with operands (compare value, saved-index cell, call target) unlike the game's,
-// so no 8-byte run of the fixture is a run of the vanilla ROM (D126); the reader takes only the opcodes and the hops.
-const call = (at: number, cmp: number, cell: number, to: number[], hop: number) => [
-  0xc9,
-  cmp,
-  0xd0,
-  rel(at + 2, hop),
-  0x5a,
-  0xda,
-  0x88,
-  0x84,
-  cell,
-  0x20,
-  ...to,
-]
-/** A 512 KB fixture ROM whose bank 2 holds only the loader's opcode shapes, with `edit` to plant a defect. */
+// An invented loader routine at the game's call site, table driven and unlike the game's: it reads the id from the list,
+// looks up a class code in a test table and stores a value in the cell of that class. Nothing here rebuilds game code (D126).
+const SITE = 0x028b1d
+const ROUTINE = 0x029000
+const TABLE = 0x029100
+const SCROLL_CELL = 0x143e
+const GEN_CELL = 0x18b9
+const SHOOT_CELL = 0x1785
+const [NORMAL, SHOOT, GEN, SCROLL] = [0, 1, 2, 3]
+/** Which class code a table byte holds for an id: shooters 0x30-0x33, generators 0x40-0x4f, scroll commands 0x90 up. */
+const BANDS = (id: number) => (id >= 0x90 ? SCROLL : id >= 0x40 && id < 0x50 ? GEN : id >= 0x30 && id < 0x34 ? SHOOT : NORMAL) // prettier-ignore
+/** What the routine stores: the id (steps with it), the id minus a constant, or the class code (does not step). */
+type Store = 'id' | 'offset' | 'flat'
+interface Plan {
+  classes?: (id: number) => number
+  store?: Partial<Record<number, Store>>
+  /** What a normal id's path does: the default returns. */
+  normal?: number[]
+  /** Run the rest of the routine in the $82 mirror of the bank. */
+  mirror?: boolean
+  /** What follows a store; the default returns, and a run that stops at the store never reaches it. */
+  afterStore?: number[]
+}
+const RTS = 0x60
+/** A 512 KB LoROM cart whose call site calls the invented routine; `edit` plants a defect after the build. */
 function cart(
-  edit: (put: (at: number, bytes: number[]) => void, buf: Buffer) => void = () => undefined,
+  plan: Plan = {},
+  edit: (put: (at: number, b: number[]) => void) => void = () => undefined,
 ): RomFile {
+  // prettier-ignore
   const buf = Buffer.alloc(0x80000)
   buf[0x7fd5] = 0x20
-  const put = (at: number, bytes: number[]) => buf.set(bytes, 0x10000 + at)
-  put(S, [...ENTRY, 0xc9, 0xa0, 0x90, rel(SC + 2, E), 0xad, 0x34, 0x12, 0x0d, 0x56, 0x12, 0xd0, rel(SC + 10, GUARD), 0x5a, 0xda, 0xa5, 0x05, 0x38, 0xe9, 0xa0, 0x8d, 0x78, 0x12]) // prettier-ignore
-  put(GUARD, [0x80, rel(GUARD, LN)])
-  put(RET, [0x60])
-  put(C, [0xb7, 0x0a, 0xc9, 0xff, 0xf0, rel(C + 4, RET), 0x0a, 0x0a, 0x0a, 0x29, 0x10, 0x85, 0x0b, 0xc8, 0xb7, 0x0c, 0x29, 0x0f, 0x05, 0x0d, 0xc5, 0x0e, 0xb0, rel(C + 22, S), 0xc8, 0xc8, 0xe8, 0x80, rel(C + 27, C)]) // prettier-ignore
-  put(AFTER, [0xc9, 0x85, 0x90, rel(AFTER + 2, ST9), 0xda, 0x5a, 0x88, 0x84, 0x0c, 0x20, 0x78, 0x94, 0x7a, 0xfa, 0x80, rel(AFTER + 14, NEXT)]) // prettier-ignore
-  put(ST9, [0xa9, 0x05, 0x80, rel(ST9 + 2, SH + 11)])
-  put(E, call(E, 0x73, 0x07, [0x34, 0x92], P))
-  put(P, call(P, 0x77, 0x09, [0x56, 0x93], G))
-  // generators 0x50..0x5f; shooters 0x4b..0x4f: a gap of 5 below the generator bound, unlike the game's.
-  put(G, [0xc9, 0x50, 0x90, rel(G + 2, SH), 0xc9, 0x60, 0xb0, rel(G + 6, AFTER), 0x38, 0xe9, 0x50, 0x1a, 0x8d, 0x9a, 0x12, 0x9e, 0x11, 0x12, 0x80, rel(G + 18, NEXT)]) // prettier-ignore
-  put(SH, [0xc9, 0x4b, 0x90, 0x05, 0x20, 0x00, 0x90, 0x80, rel(SH + 7, NEXT), 0xa9, 0x01])
-  put(NEXT, [0x80, rel(NEXT, LN)])
-  put(LS, [0x86, 0x09, 0x88, 0x84, 0x0a, 0x85, 0x0b, 0xa2, 0x05, 0xbd, 0x11, 0x14, 0xf0, 0x0e, 0xca, 0x10, 0xf4]) // prettier-ignore
-  edit(put, buf)
+  const put = (at: number, bytes: number[]) =>
+    buf.set(bytes, (at & 0x7fff) + ((at >> 16) & 0x3f) * 0x8000)
+  const value = (s: Store) => (s === 'id' ? [0x8a] : s === 'offset' ? [0x8a, 0x38, 0xe9, 0x07] : [])
+  const tail = (code: number, cell: number) => [
+    ...value(plan.store?.[code] ?? 'id'),
+    0x8d,
+    cell & 0xff,
+    cell >> 8,
+    ...(plan.afterStore ?? [RTS]),
+  ]
+  const [shoot, gen, scroll] = [
+    tail(SHOOT, SHOOT_CELL),
+    tail(GEN, GEN_CELL),
+    tail(SCROLL, SCROLL_CELL),
+  ]
+  const jump = (ROUTINE & 0xffff) + 6 // the mirror's jump lands on the lookup, which starts right after it
+  const head = [0xa5, 0x14, ...(plan.mirror ? [0x5c, jump & 0xff, jump >> 8, 0x82] : [])]
+  const normal = plan.normal ?? [RTS]
+  const lookup = [0xa0, 0x03, 0xb7, 0xce, 0xaa, 0xbf, TABLE & 0xff, (TABLE >> 8) & 0xff, 0x02]
+  const tests = (code: number, to: number) => [0xc9, code, 0xf0, to]
+  const base = lookup.length + 12 + normal.length // the first tail starts after three tests and the normal path
+  const at = [base, base + shoot.length, base + shoot.length + gen.length]
+  const branches = [SHOOT, GEN, SCROLL].flatMap((code, i) => tests(code, at[i]! - (lookup.length + 4 * (i + 1)))) // prettier-ignore
+  put(SITE, [0x20, ROUTINE & 0xff, (ROUTINE >> 8) & 0xff])
+  put(ROUTINE, new Array(0x100).fill(0x4b)) // filler after the code, never run
+  put(ROUTINE, [...head, ...lookup, ...branches, ...normal, ...shoot, ...gen, ...scroll])
+  put(
+    TABLE,
+    Array.from({ length: 256 }, (_, id) => (plan.classes ?? BANDS)(id)),
+  )
+  edit(put)
   return RomFile.fromBytes('x.sfc', buf)
 }
 /** The unavailable reason for a ROM's loader read, or 'ok'. */
@@ -311,243 +318,98 @@ const reasonOf = (rom: RomFile) => {
   const r = loadClasses(rom)
   return r.status === 'unavailable' ? r.reason : 'ok'
 }
+/** Class codes with a run of ids moved: the shooter ids in two pieces, a generator band below the shooters, or a hole in the scroll ids. */
+const withGap = (id: number) => (id === 0x32 ? NORMAL : BANDS(id))
+const generatorsFirst = (id: number) => (id >= 0x10 && id < 0x20 ? GEN : id >= 0x30 && id < 0x34 ? SHOOT : BANDS(id) === GEN ? NORMAL : BANDS(id)) // prettier-ignore
+const scrollHole = (id: number) => (id === 0xc0 ? NORMAL : BANDS(id))
 
-/** Each planted defect, the loader read it must break, and the reason it must give: one test per gate. */
-const GATES: [string, (put: (at: number, b: number[]) => void) => void, RegExp][] = [
-  [
-    'scroll subtract differs from compare',
-    put => put(SC + 18, [0xa1]),
-    /scroll test and the command number/,
-  ],
-  [
-    'generator subtract differs from compare',
-    put => put(G + 10, [0x51]),
-    /generator test and the number/,
-  ],
-  ['generator low branch elsewhere', put => put(G + 3, [0x20]), /hand lower ids to the shooter/],
-  [
-    'generator upper-bound branch into the generator path',
-    put => put(G + 7, [0x00]),
-    /upper bound does not skip/,
-  ],
-  [
-    'generator upper-bound branch elsewhere',
-    put => put(G + 7, [0x30]),
-    /upper bound does not skip/,
-  ],
-  ['generator skip-on hop elsewhere', put => put(G + 19, [0x00]), /go on to the next sprite/],
-  ['shooter skip-on hop elsewhere', put => put(SH + 8, [0x00]), /go on to the next sprite/],
-  ['Eeries test takes a shooter-band id', put => put(E + 1, [0x4c]), /Eeries or platform test/],
-  ['platform test takes a generator-band id', put => put(P + 1, [0x52]), /Eeries or platform test/],
-  [
-    'Eeries test takes the scroll bound itself',
-    put => put(E + 1, [0xa0]),
-    /Eeries or platform test/,
-  ],
-  ['caller branch redirected away from the routine', put => put(C + 23, [0x00]), /caller loop/],
-  ['caller loop missing', put => put(C, [0xea]), /caller loop/],
-  ['caller loop end-of-list branch elsewhere', put => put(C + 5, [0x00]), /caller loop/],
-  ['caller loop does not repeat', put => put(C + 28, [0x00]), /caller loop/],
-  [
-    'entry skips land somewhere other than the caller loop step',
-    put => (put(S + 9, [rel(S + 8, GUARD)]), put(S + 14, [rel(S + 13, GUARD)])),
-    /load start does not skip/,
-  ],
-  [
-    'generator upper bound lands on a missing cluster test',
-    put => put(AFTER, [0xea]),
-    /upper-bound path/,
-  ],
-  ['cluster test below-range branch elsewhere', put => put(AFTER + 3, [0x00]), /upper-bound path/],
-  ['cluster test tail goes elsewhere', put => put(AFTER + 15, [0x00]), /upper-bound path/],
-  ['carried-shell path goes elsewhere', put => put(ST9 + 3, [0x00]), /upper-bound path/],
-  [
-    'shooter test relocated, everything else relinked',
-    put => {
-      const SH2 = SH + 8
-      put(SH, new Array(11).fill(0))
-      put(SH2, [0xc9, 0x4b, 0x90, 0x05, 0x20, 0x00, 0x90, 0x80, rel(SH2 + 7, NEXT), 0xa9, 0x01])
-      put(G + 3, [rel(G + 2, SH2)])
-      put(ST9 + 3, [rel(ST9 + 2, SH2 + 11)])
-    },
-    /upper-bound path/,
-  ],
-  ['carried-shell path missing', put => put(ST9, [0xea]), /upper-bound path/],
-  [
-    'shooter call repointed to another routine',
-    put => put(SH + 5, [0x00, 0x91]),
-    /shooter test calls/,
-  ],
-  ['shooter call points past the bank', put => put(SH + 5, [0xfe, 0xff]), /shooter test calls/],
-  [
-    'shooter loader opening cut off by the end of the bank',
-    // 16 of its 17 bytes fit; the last is a wildcard that would "match" off the end if reads were not bounded
-    put => (
-      put(
-        0x7ff0,
-        [
-          0x86, 0x09, 0x88, 0x84, 0x0a, 0x85, 0x0b, 0xa2, 0x05, 0xbd, 0x11, 0x14, 0xf0, 0x0e, 0xca,
-          0x10,
-        ],
-      ),
-      put(SH + 5, [0xf0, 0xff])
-    ),
-    /shooter test calls/,
-  ],
-  ['shooter call points below the bank', put => put(SH + 5, [0x00, 0x40]), /shooter test calls/],
-  [
-    'entry skips land on the first byte of the Eeries test',
-    put => (put(S + 9, [rel(S + 8, E)]), put(S + 14, [rel(S + 13, E)])),
-    /load start does not skip/,
-  ],
-  [
-    'entry first skip lands on a return byte inside a matched shape',
-    put => (put(S + 3, [0x60]), put(S + 1, [rel(S, S + 3)])),
-    /load start does not skip/,
-  ],
-  ['the next-sprite branch is not a branch', put => put(NEXT, [0xea]), /go on to the next sprite/],
-  [
-    'the next-sprite branch goes nowhere (displacement 0)',
-    put => put(NEXT + 1, [0x00]),
-    /go on to the next sprite/,
-  ],
-  [
-    'scroll guard goes backward to a branch before the scroll test',
-    put => (put(0xb8, [0x80, rel(0xb8, LN)]), put(SC + 11, [rel(SC + 10, 0xb8)])),
-    /guard does not skip/,
-  ],
-  ['scroll guard branch goes elsewhere', put => put(GUARD + 1, [0x00]), /guard does not skip/],
-  [
-    'scroll guard lands on the first byte of the store operand',
-    put => (put(SC + 20, [0x80, rel(SC + 20, LN)]), put(SC + 11, [rel(SC + 10, SC + 20)])),
-    /guard does not skip/,
-  ],
-  ['entry first skip is not a return', put => put(RET, [0xea]), /load start does not skip/],
-  [
-    'entry skips land in different places',
-    put => put(S + 14, [rel(S + 13, LN + 2)]),
-    /load start does not skip/,
-  ],
-  [
-    'entry skips both land inside the routine',
-    put => (put(S + 9, [rel(S + 8, S + 0x20)]), put(S + 14, [rel(S + 13, S + 0x20)])),
-    /load start does not skip/,
-  ],
-  ['scroll guard lands off a branch', put => put(GUARD, [0xea]), /guard does not skip/],
-  [
-    'scroll guard lands on a branch before its store',
-    put => (put(S + 3, [0x80]), put(SC + 11, [rel(SC + 10, S + 3)])),
-    /guard does not skip/,
-  ],
-  ['shooter low branch elsewhere', put => put(SH + 3, [0x06]), /hand lower ids on/],
-  ['scroll branch elsewhere', put => put(SC + 3, [0x10]), /does not lead through/],
-  ['Eeries branch elsewhere', put => put(E + 3, [0x02]), /does not lead through/],
-  ['platforms branch elsewhere', put => put(P + 3, [0x02]), /does not lead through/],
-  ['shooter bound not below generator', put => put(SH + 1, [0x55]), /not in an order/],
-  ['generator end past the scroll bound', put => put(G + 5, [0xb0]), /Eeries or platform test/],
-]
-
-/** Positions are written out here, not walked from SHAPES: nulling an opcode in the code under test must fail these. */
-const OPCODES: Record<string, { at: number[]; idx: number[] }> = {
-  scroll: { at: [S], idx: [0, 2, 4, 5, 6, 8, 10, 13, 15, 17, 20, 21, 23, 25, 26, 28, 30, 33, 36, 38, 39, 40, 42, 43, 45] }, // prettier-ignore
-  loaderCall: { at: [E, P], idx: [0, 2, 4, 5, 6, 7, 9] },
-  generator: { at: [G], idx: [0, 2, 4, 6, 8, 9, 11, 12, 15, 18] },
-  shooter: { at: [SH], idx: [0, 2, 4, 7, 9] },
-  loadShooter: { at: [LS], idx: [0, 2, 3, 5, 7, 9, 12, 14, 15] },
-  caller: {
-    at: [C],
-    idx: [0, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 16, 17, 18, 20, 22, 24, 25, 26, 27],
-  },
-  cluster: { at: [AFTER], idx: [0, 2, 4, 5, 6, 7, 9, 12, 13, 14] },
-  status9: { at: [ST9], idx: [0, 2] },
-}
-/** One case per opcode position, copy and change (a flip and a near-miss), each its own test. */
-const OPCODE_CASES: [string, number, number, number][] = Object.entries(OPCODES).flatMap(
-  ([name, { at, idx }]) =>
-    at.flatMap(base =>
-      idx.flatMap(i =>
-        [0xff, 0x04].map(
-          c =>
-            [`${name}[${i}] at $${base.toString(16)} ^$${c.toString(16)}`, base, i, c] as [
-              string,
-              number,
-              number,
-              number,
-            ],
-        ),
-      ),
-    ),
-)
-
-describe('LoadClass reads the loader from its operands', () => {
-  it('classes follow the planted bounds, not the game values or a fixed gap', () => {
+describe('LoadClass runs the loader and reads the class from what it writes', () => {
+  it.each([
+    [0x00, 'normal'],
+    [0x2f, 'normal'],
+    [0x30, 'shooter'],
+    [0x33, 'shooter'],
+    [0x34, 'normal'],
+    [0x40, 'generator'],
+    [0x4f, 'generator'],
+    [0x50, 'normal'],
+    [0x8f, 'normal'],
+    [0x90, 'scroll'],
+    [0xff, 'scroll'],
+  ] as [number, LoadClass][])('routes id $%s as %s', (id, want) => {
     const r = loadClasses(cart())
     if (r.status !== 'ok') throw new Error(r.reason)
-    const ids = [0x10, 0x4a, 0x4b, 0x4f, 0x50, 0x5f, 0x60, 0x9f, 0xa0, 0xff]
-    expect(ids.map(r.of)).toEqual(['normal', 'normal', 'shooter', 'shooter', 'generator', 'generator', 'normal', 'normal', 'scroll', 'scroll']) // prettier-ignore
-    // A shooter bound taken as the generator bound minus 2 would call 0x4e shooter and 0x4b normal.
-    expect([0x4b, 0x4c, 0x4d].map(r.of)).toEqual(['shooter', 'shooter', 'shooter'])
+    expect(r.of(id)).toBe(want)
   })
 
-  it.each(GATES)('gate: %s', (_name, edit, why) => {
-    expect(reasonOf(cart(edit))).toMatch(why)
+  it('a value that steps with the id from a constant offset is accepted', () => {
+    expect(reasonOf(cart({ store: { [SCROLL]: 'offset', [GEN]: 'offset', [SHOOT]: 'offset' } }))).toBe('ok') // prettier-ignore
   })
 
-  it('the unplanted fixture reads ok', () => {
-    expect(reasonOf(cart())).toBe('ok')
+  it('a return through the other bank mirror counts as a return', () => {
+    expect(reasonOf(cart({ mirror: true }))).toBe('ok')
   })
 
-  it.each(OPCODE_CASES)(
-    'opcode %s: a flip or a near-miss makes the read unavailable',
-    (_title, base, i, change) => {
-      const rom = cart((_put, buf) => (buf[0x10000 + base + i]! ^= change))
-      expect(reasonOf(rom)).not.toBe('ok')
-    },
-  )
-
-  it('the opcode positions are exactly the non-operand bytes of the shapes, and every one is a case', () => {
-    expect(OPCODE_CASES.length).toBe(2 * (25 + 2 * 7 + 10 + 5 + 9 + 21 + 10 + 2))
-    for (const [name, shape] of Object.entries(SHAPES))
-      expect(
-        shape.flatMap((w, i) => (w === null ? [] : [i])),
-        name,
-      ).toEqual(OPCODES[name]!.idx)
+  it.each([
+    [
+      'the call site is not a JSR',
+      cart({}, put => put(SITE, [0xea])),
+      /does not call the level loader/,
+    ],
+    ['the target does not open with a direct-page load', cart({}, put => put(ROUTINE, [0xea])), /does not open the way/], // prettier-ignore
+    ['a normal id hits BRK', cart({ normal: [0x00] }), /id \$00: BRK executed/],
+    [
+      'a normal id leaves ROM',
+      cart({ normal: [0x5c, 0x00, 0x00, 0x7e] }),
+      /id \$00: execution left ROM/,
+    ],
+    ['a normal id never returns', cart({ normal: [0x80, 0xfe] }), /id \$00: did not return within/],
+    [
+      'a normal id returns with the stack off',
+      cart({ normal: [0x48, RTS] }),
+      /id \$00: returned with the stack/,
+    ],
+    ['a stray pop in the mirror bank keeps running', cart({ mirror: true, normal: [0xc2, 0x20, 0x68, 0xea, RTS] }), /id \$00: returned with the stack/], // prettier-ignore
+    ['the shooter ids have a gap', cart({ classes: withGap }), /shooter ids are not one run/],
+    ['the generators come before the shooters', cart({ classes: generatorsFirst }), /shooter ids do not come after|generator ids do not come after/], // prettier-ignore
+    ['the scroll ids have a hole', cart({ classes: scrollHole }), /scroll ids are not one run/],
+    ['the shooter value does not step with the id', cart({ store: { [SHOOT]: 'flat' } }), /shooter value does not step/], // prettier-ignore
+    ['the generator value does not step with the id', cart({ store: { [GEN]: 'flat' } }), /generator value does not step/], // prettier-ignore
+    ['the scroll value does not step with the id', cart({ store: { [SCROLL]: 'flat' } }), /scroll value does not step/], // prettier-ignore
+  ] as [string, RomFile, RegExp][])('unavailable when %s', (_title, rom, why) => {
+    expect(reasonOf(rom)).toMatch(why)
   })
 
-  it('the order gate is exact: generator end above its start, with room before the scroll bound for the Eeries and platform ids', () => {
-    expect(reasonOf(cart(put => put(G + 5, [0x50])))).toMatch(/not in an order/) // end == start
-    expect(reasonOf(cart(put => put(G + 5, [0x40])))).toMatch(/not in an order/) // end < start
-    expect(reasonOf(cart(put => put(G + 5, [0xa0])))).toMatch(/Eeries or platform test/) // end == scroll bound: no room left
-    expect(reasonOf(cart(put => put(G + 5, [0xa1])))).toMatch(/Eeries or platform test/)
-    expect(reasonOf(cart(put => put(G + 5, [0x74])))).toMatch(/Eeries or platform test/) // end below the ids the two tests take
-    expect(reasonOf(cart(put => put(SH + 1, [0x50])))).toMatch(/not in an order/) // shooter start == generator start
-  })
-
-  it('a backward branch in the chain is followed as a signed displacement', () => {
-    // The Eeries test moves ahead of the scroll test: the scroll test's branch goes backward.
-    const E2 = 0xe0
-    const moved = (put: (at: number, b: number[]) => void) => {
-      put(E2, call(E2, 0x73, 0x07, [0x34, 0x92], P))
-      put(SC + 3, [rel(SC + 2, E2)])
-    }
-    expect(reasonOf(cart(moved))).toBe('ok')
-    expect(reasonOf(cart((put, buf) => (moved(put), put(SC + 3, [buf[0x10000 + SC + 3]! ^ 0x01]))))).toMatch(/does not lead through/) // prettier-ignore
-  })
-
-  it('a hook patched over the routine start reads unavailable', () => {
-    expect(reasonOf(cart(put => put(S, [0x5c, 0x00, 0x90, 0x02])))).toMatch(
-      /routine start before the scroll test/,
-    ) // a JML over the entry
-  })
-  it('a second copy of a shape makes the read ambiguous (first of many is not taken)', () => {
-    const second = (put: (at: number, b: number[]) => void) => put(0x400, [0xc9, 0x77, 0x90, 0x10, 0xc9, 0x78, 0xb0, 0x20, 0x38, 0xe9, 0x77, 0x1a, 0x8d, 0x00, 0x12, 0x9e, 0x01, 0x12, 0x80, 0x04]) // prettier-ignore
-    expect(reasonOf(cart(second))).toMatch(/generator test was found 2 times/)
-    const shooter2 = (put: (at: number, b: number[]) => void) => put(0x400, [0xc9, 0x77, 0x90, 0x05, 0x20, 0x00, 0x90, 0x80, 0x02, 0xa9, 0x01]) // prettier-ignore
-    expect(reasonOf(cart(shooter2))).toMatch(/shooter test was found 2 times/)
-  })
-
-  it('refuses a cart with no loader at all', () => {
+  it('a ROM with no loader at all is unavailable', () => {
     expect(loadClasses(RomFile.fromBytes('x.sfc', Buffer.alloc(0x80000)))).toMatchObject({ status: 'unavailable' }) // prettier-ignore
+  })
+})
+
+describe('LoadClass caches by the bytes the runs read', () => {
+  it('an edit to a byte the run read recomputes; an edit to one it never read keeps the same answer', () => {
+    const rom = cart()
+    const first = loadClasses(rom)
+    rom.writeAt(TABLE + 0x34, [SHOOT]) // id $34 is read by its run, and extends the shooter band
+    const edited = loadClasses(rom)
+    expect(edited).not.toBe(first)
+    if (edited.status !== 'ok') throw new Error('unavailable')
+    expect(edited.of(0x34)).toBe('shooter')
+    rom.writeAt(0x02f000, [0x12]) // nothing reads it
+    expect(loadClasses(rom)).toBe(edited)
+  })
+
+  it('a new RomFile of the same bytes shares the answer (the working copy hands out a new one per call)', () => {
+    expect(loadClasses(cart())).toBe(loadClasses(cart()))
+  })
+
+  it('the run stops at the first write to a cell: a BRK after the store is never reached', () => {
+    expect(reasonOf(cart({ afterStore: [0x00] }))).toBe('ok')
+  })
+
+  it('the first write decides: a later write to another cell changes nothing', () => {
+    const r = loadClasses(cart({ afterStore: [0x8d, SCROLL_CELL & 0xff, SCROLL_CELL >> 8, RTS] }))
+    if (r.status !== 'ok') throw new Error(r.reason)
+    expect([0x31, 0x45, 0x95].map(r.of)).toEqual(['shooter', 'generator', 'scroll'])
   })
 })
 
@@ -567,8 +429,8 @@ describe('the runner routes by what LoadClass read, with no fallback to the game
   it('routes the planted shooter and scroll bands without running sprite code; the game bands run as sprites', () => {
     const ran: number[] = []
     const d = drawerFor(cart(), ran)
-    expect(d(sprite(0x4b))).toMatchObject({ ok: false, routed: 'shooter' })
-    expect(d(sprite(0x55))).toMatchObject({ ok: false, routed: 'generator' })
+    expect(d(sprite(0x31))).toMatchObject({ ok: false, routed: 'shooter' })
+    expect(d(sprite(0x45))).toMatchObject({ ok: false, routed: 'generator' })
     expect(d(sprite(0xa0))).toMatchObject({ ok: false, routed: 'scroll' })
     expect(ran).toEqual([])
     // 0x70 is in no planted band, so it runs as a sprite.
@@ -579,7 +441,7 @@ describe('the runner routes by what LoadClass read, with no fallback to the game
   it('an unreadable loader routes nothing: the game bands are not assumed', () => {
     const ran: number[] = []
     const d = drawerFor(
-      cart(put => put(SH, [0xea, 0xea])),
+      cart({}, put => put(SITE, [0xea])),
       ran,
     )
     d(sprite(0xe8))
@@ -589,15 +451,6 @@ describe('the runner routes by what LoadClass read, with no fallback to the game
 })
 
 describe('review findings (#1273)', () => {
-  it('loadClasses re-reads after a write to the same ROM: the cache is keyed on the version', () => {
-    const rom = cart()
-    expect(reasonOf(rom)).toBe('ok')
-    rom.writeAt(0x028000 + SC + 18, [0xa1]) // the scroll subtract no longer matches its compare
-    expect(reasonOf(rom)).toMatch(/scroll test and the command number/)
-    rom.writeAt(0x028000 + SC + 18, [0xa0]) // and back: read again, ok again
-    expect(reasonOf(rom)).toBe('ok')
-  })
-
   it('a shooter with no sprite name still gets the timer words, not the generic line', () => {
     expect(quietText({ kind: 'shooter', name: undefined })).toBe('Shooter: fires on a timer; nothing is drawn until it does') // prettier-ignore
   })
@@ -607,7 +460,7 @@ describe('review findings (#1273)', () => {
     const geometry = { isVertical: false, screenCount: 1 }
     const empty = () => runModel({ emptyReason: 'drew no OAM tile' })
     const unreadable = interpDrawer(
-      cart(put => put(SH, [0xea, 0xea])),
+      cart({}, put => put(SITE, [0xea])),
       0,
       geometry,
       empty,
@@ -619,7 +472,7 @@ describe('review findings (#1273)', () => {
       'placeholder',
     )
     // A reason already there is kept, not replaced.
-    const kept = interpDrawer(cart(put => put(SH, [0xea, 0xea])), 0, geometry, () => runModel({ emptyReason: 'x', unverifiedReason: 'seed lacks state' }), seedFor)(sprite(0x70)) // prettier-ignore
+    const kept = interpDrawer(cart({}, put => put(SITE, [0xea])), 0, geometry, () => runModel({ emptyReason: 'x', unverifiedReason: 'seed lacks state' }), seedFor)(sprite(0x70)) // prettier-ignore
     expect(kept).toMatchObject({ unverified: expect.stringContaining('seed lacks state') })
     // Readable routing: the empty run is verified, so quiet.
     const readable = interpDrawer(cart(), 0, geometry, empty, seedFor)(sprite(0x70))

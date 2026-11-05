@@ -226,7 +226,16 @@ function ring(): Uint8ClampedArray {
   for (let y = 0; y < MARK; y++) {
     for (let x = 0; x < MARK; x++) {
       const d = Math.hypot(x - 7.5, y - 7.5)
-      const c = d < 1.5 ? RING_LIGHT : d < 2.5 ? RING_EDGE : d >= 6 && d < 7 ? RING_LIGHT : d >= 7 && d < 8 ? RING_EDGE : undefined // prettier-ignore
+      const c =
+        d < 1.5
+          ? RING_LIGHT
+          : d < 2.5
+            ? RING_EDGE
+            : d >= 6 && d < 7
+              ? RING_LIGHT
+              : d >= 7 && d < 8
+                ? RING_EDGE
+                : undefined
       if (c) out.set(c, (y * MARK + x) * 4)
     }
   }
@@ -312,7 +321,11 @@ export function drawSprites(
     // The one place a quiet verdict is made, on the final result (after any step that may still reveal a drawing): a run that
     // ended empty, or an id the game's loader never runs as a sprite. Everything else that did not draw stays the failure box.
     // An empty run on a generic (unverified) seed may only lack state, so it keeps the box and its warning.
-    if (!res.ok && (('routed' in res && res.routed) || ('empty' in res && res.empty && !res.unverified))) return quiet(s, res.reason, 'routed' in res ? res.routed : undefined) // prettier-ignore
+    if (
+      !res.ok &&
+      (('routed' in res && res.routed) || ('empty' in res && res.empty && !res.unverified))
+    )
+      return quiet(s, res.reason, 'routed' in res ? res.routed : undefined)
     if (!res.ok) return placeholder(s, 'reason' in res ? res.reason : res.failure.kind, 'unverified' in res ? res.unverified : undefined) // prettier-ignore
     if (res.parts.length === 0) return placeholder(s, 'noParts')
     let unverified = 'unverified' in res ? res.unverified : undefined
@@ -563,9 +576,21 @@ export function modelResult(m: RunModel): SpriteDrawResult {
   const colors = pass ? runtimeColors(m) : undefined
   if (colors?.why) why.push(colors.why)
   const u = why.length ? { unverified: why.join('; ') } : {}
-  if (!pass) return { ok: false, reason: m.emptyReason ?? 'drew no tile', ...(m.emptyReason ? { empty: true } : {}), ...u } // prettier-ignore
+  if (!pass)
+    return {
+      ok: false,
+      reason: m.emptyReason ?? 'drew no tile',
+      ...(m.emptyReason ? { empty: true } : {}),
+      ...u,
+    }
   const uploads = m.chosen === undefined ? undefined : m.uploads?.[m.chosen]
-  if (!m.anchor) return { ok: false, reason: m.emptyReason ?? 'drew no tile', ...(m.emptyReason ? { empty: true } : {}), ...u } // prettier-ignore
+  if (!m.anchor)
+    return {
+      ok: false,
+      reason: m.emptyReason ?? 'drew no tile',
+      ...(m.emptyReason ? { empty: true } : {}),
+      ...u,
+    }
   // The at-rest picture of a sprite whose INIT shifts it is drawn where INIT left it; its list position is the stored tile.
   const stored = m.shifted
     ? { stored: { x: m.anchor.rawX, y: m.anchor.rawY }, afterInit: m.initAt }
@@ -840,14 +865,24 @@ export function interpRunner(
     // The game's loader never runs a shooter, generator or scroll command as a sprite (LoadClass.ts), so there is no sprite
     // code to run for it. A class that cannot be read leaves the id to the sprite path (and its refusal).
     const routed = classes.status === 'ok' ? classes.of(s.spriteId) : 'normal'
-    if (routed !== 'normal') return { direct: { ok: false, reason: `the game's loader treats it as a ${routed}, not a sprite`, routed } } // prettier-ignore
+    if (routed !== 'normal')
+      return {
+        direct: {
+          ok: false,
+          reason: `the game's loader treats it as a ${routed}, not a sprite`,
+          routed,
+        },
+      }
     // The map's own loader placed it at map load (D156): it also spawns at the map-load camera.
     const opening = !!w && s.index >= 0 && s.index < 128 && !!w[SPRITE_LOAD_STATUS + s.index]
     let m = run(rom, s.spriteId, seed(camera, { opening }))
     // An empty run is only "ran fine" if the loader's routing was readable: otherwise the id may be a shooter, generator or
     // scroll command the game never runs as a sprite, so the run is unverified (it keeps the box and says why).
     if (classes.status === 'unavailable' && m.emptyReason && !m.unverifiedReason)
-      m = { ...m, unverifiedReason: `the loader's id routing could not be read (${classes.reason}), so an empty run may be a shooter, generator or scroll command` } // prettier-ignore
+      m = {
+        ...m,
+        unverifiedReason: `the loader's id routing could not be read (${classes.reason}), so an empty run may be a shooter, generator or scroll command`,
+      }
     // A sprite placed at the game's own layout (the bonus game) was replayed in the loader's top slot; an earlier loaded sprite
     // may have taken it, which moves one block by a pixel and changes its item (measured on $000, slots 9 vs 8): drawn, marked.
     if (
@@ -1213,7 +1248,13 @@ export function framesOf(
   dynamic?: (note: PaletteNote) => RgbaColor[],
 ): { frames: MapSpriteDto[]; reason?: string } {
   if ('direct' in run)
-    return { frames: [], reason: !run.direct.ok && 'routed' in run.direct && run.direct.routed ? 'it has no picture' : 'it is drawn by a special routine' } // prettier-ignore
+    return {
+      frames: [],
+      reason:
+        !run.direct.ok && 'routed' in run.direct && run.direct.routed
+          ? 'it has no picture'
+          : 'it is drawn by a special routine',
+    }
   const { m, fixed } = run
   const ref = m.chosen === undefined ? undefined : m.passes[m.chosen]
   if (!ref || !drawnParts(ref).length) {
