@@ -68,6 +68,7 @@ const locate = (page, slot, mapW, mapH, x, y) =>
     { edge: `${rootOf(slot)} [data-control="map-edge"]`, mapW, mapH, x, y },
   )
 
+/** The text of Theia's open hover, or null when none is showing. */
 const hoverText = page =>
   page.evaluate(() => {
     const h = document.querySelector('.theia-hover')
@@ -123,6 +124,7 @@ test.describe('vanilla ROM, map $126', () => {
     if (tmp) fs.rmSync(tmp, { recursive: true, force: true })
   })
 
+  /** The node service's sprite reply for the map under test. */
   const reply = (page, mp) => page.evaluate(({ mp, slot }) => getSvc('Symbol(ProjectService)').mapSprites(mp, slot), { mp, slot: SLOT }) // prettier-ignore
   const mpOf = () => test.info().annotations.find(a => a.type === 'mp').description
 
@@ -198,6 +200,7 @@ test.describe('no ROM: a canned quiet scroll command', () => {
     expect(pageErrors).toEqual([])
   })
 
+  /** Opens a synthetic map holding one canned quiet scroll command at (X, Y). */
   async function open(page) {
     await page.evaluate(
       async ({ index, x, y }) => {

@@ -68,6 +68,7 @@ export function loadClasses(rom: RomFile): LoadClasses {
 function read(rom: RomFile): LoadClasses {
   const code = rom.readAt(BANK2, 0x8000)
   if (!code) return fail('bank 2 of the ROM could not be read')
+  /** The one place a shape matches, or the reason it does not match exactly once. */
   const once = (name: string, shape: (number | null)[]): number | string => {
     const hits = find(code, shape)
     return hits.length === 1 ? hits[0]! : `the level loader's ${name} test was found ${hits.length} times, so which one runs is unknown` // prettier-ignore

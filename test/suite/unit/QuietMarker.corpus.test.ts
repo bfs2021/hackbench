@@ -15,6 +15,7 @@ import { slow } from '../support/loadTimeout'
 
 describe.skipIf(!hasRom(VANILLA))('quiet marker on the vanilla ROM', () => {
   const bytes = new Uint8Array(hasRom(VANILLA) ? readFileSync(romPath(VANILLA)) : 0)
+  /** The sprites the node service serves for one vanilla map, or a failure. */
   const get = (map: number) => {
     const r = mapSprites(new L1ModelCache(), bytes, romPath(VANILLA), map)
     if (r.status !== 'ok') throw new Error(JSON.stringify(r))

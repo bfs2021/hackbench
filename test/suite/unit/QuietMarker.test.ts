@@ -34,19 +34,25 @@ import {
 import type { MapSpriteDto } from '../../../theia/extension/src/common/project-protocol'
 import { COLORS } from '../support/mapInputs'
 
+/** A list sprite with the given id, index and first raw byte (bit 3 is the extra-bits flag). */
 const sprite = (spriteId: number, index = 0, raw0 = 0): LevelSprite =>
   ({ screen: 0, x: 3, y: 4, spriteId, extraBit: false, raw: [raw0, 0, 0], index }) as LevelSprite
+/** The minimal sprite model drawSprites needs when no pixel is blitted (a verdict-only stand-in). */
 const model = { vram: {} as never, colors: COLORS }
 // A test stand-in for the loader's routing; production reads it from the ROM (LoadClass.ts).
 const routedOf = (id: number): LoadClass =>
   id >= 0xe7 ? 'scroll' : id === 0xc9 ? 'shooter' : 'normal'
+/** A drawer that answers each sprite id from a fixed table of results. */
 const draw = (results: Record<number, SpriteDrawResult>) => (s: LevelSprite) => results[s.spriteId]!
+/** Draws the sprites through drawSprites with the fixed results and the test routing. */
 const run = (sprites: LevelSprite[], results: Record<number, SpriteDrawResult>) =>
   drawSprites(sprites, model, draw(results), undefined, routedOf)
+/** Reads a DTO bitmap's alpha at a local pixel. */
 const alpha = (d: MapSpriteDto) => {
   const b = Buffer.from(d.rgba, 'base64')
   return (x: number, y: number) => b[(y * 16 + x) * 4 + 3]!
 }
+/** A run model with no passes, overridden by `o`, as the interpreter would hand back. */
 const runModel = (o: Partial<SpriteModel>): SpriteModel => ({ id: 1, passes: [], dependsOn: [], steps: [], ...o }) // prettier-ignore
 
 describe('the verdict decides the marker', () => {
@@ -250,6 +256,7 @@ const E = 0x140 // the Eeries test
 const P = 0x150 // the platforms test
 const G = 0x1a0 // the generator test
 const SH = 0x1b4 // the shooter test, 20 bytes past the generator test
+/** The branch displacement byte from `at` to `to`. */
 const rel = (at: number, to: number) => (to - (at + 2)) & 0xff
 // The Eeries/platforms test shape with operands (compare value, saved-index cell, call target) unlike the game's,
 // so no 8-byte run of the fixture is a run of the vanilla ROM (D126); the reader takes only the opcodes and the hops.
@@ -266,6 +273,7 @@ const call = (at: number, cmp: number, cell: number, to: number[], hop: number) 
   0x20,
   ...to,
 ]
+/** A 512 KB fixture ROM whose bank 2 holds only the loader's opcode shapes, with `edit` to plant a defect. */
 function cart(
   edit: (put: (at: number, bytes: number[]) => void, buf: Buffer) => void = () => undefined,
 ): RomFile {
@@ -281,6 +289,7 @@ function cart(
   edit(put, buf)
   return RomFile.fromBytes('x.sfc', buf)
 }
+/** The unavailable reason for a ROM's loader read, or 'ok'. */
 const reasonOf = (rom: RomFile) => {
   const r = loadClasses(rom)
   return r.status === 'unavailable' ? r.reason : 'ok'
@@ -392,6 +401,7 @@ describe('LoadClass reads the loader from its operands', () => {
 describe('the runner routes by what LoadClass read, with no fallback to the game bands', () => {
   const seedFor = () => withSeed({ loaded: new Uint8Array(0x2000) })
   const geometry = { isVertical: false, screenCount: 1 }
+  /** A real interpDrawer over the fixture ROM with a spy run that records which ids ran as sprites. */
   const drawerFor = (rom: RomFile, ran: number[]) =>
     interpDrawer(
       rom,
