@@ -95,6 +95,7 @@ import {
   romMissingMessage,
   unverifiedLabel,
   withDetail,
+  unverifiedCauses,
 } from './map-view-messages'
 
 export { slotLabel }
@@ -1367,10 +1368,7 @@ export class MapViewWidget extends ReactWidget implements ProjectBound {
   /** Tooltip for Sprites: the label first, then the technical detail as a second line, so raw text never leads (#967). */
   protected spritesTitle(): string {
     if (this.spritesWhy) return withDetail(this.spritesLabel(), this.spritesDetail)
-    return withDetail(
-      this.spritesLabel(),
-      this.sprites?.sprites.find(x => x.unverified)?.unverified,
-    )
+    return withDetail(this.spritesLabel(), unverifiedCauses(this.sprites?.sprites ?? []))
   }
 
   protected toggleSprites(): void {
