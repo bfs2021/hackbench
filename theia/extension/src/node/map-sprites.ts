@@ -774,7 +774,7 @@ export function interpRunner(
     if (s.spriteId === TORPEDO_LAUNCHER_ID) return { direct: launcherResult(rom, seed(camera)) } // prettier-ignore
     // The game's loader never runs a shooter, generator or scroll command as a sprite (LoadClass.ts), so there is no sprite
     // code to run for it. A class that cannot be read leaves the id to the sprite path (and its refusal).
-    const routed = classes.ok ? classes.of(s.spriteId) : 'normal'
+    const routed = classes.status === 'ok' ? classes.of(s.spriteId) : 'normal'
     if (routed !== 'normal') return { direct: { ok: false, reason: `the game's loader treats it as a ${routed}, not a sprite`, routed } } // prettier-ignore
     // The map's own loader placed it at map load (D156): it also spawns at the map-load camera.
     const opening = !!w && s.index >= 0 && s.index < 128 && !!w[SPRITE_LOAD_STATUS + s.index]

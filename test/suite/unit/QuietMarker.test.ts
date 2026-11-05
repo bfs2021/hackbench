@@ -134,13 +134,13 @@ function cart(over: { scrollSub?: number; skipShooter?: boolean } = {}): RomFile
 describe('LoadClass reads the loader from its operands', () => {
   it('classes follow the planted bounds, not the game values', () => {
     const r = loadClasses(cart())
-    if (!r.ok) throw new Error(r.reason)
+    if (r.status !== 'ok') throw new Error(r.reason)
     expect([0x10, 0x4d, 0x4e, 0x4f, 0x50, 0x5f, 0x60, 0x9f, 0xa0, 0xff].map(r.of)).toEqual(['normal', 'normal', 'shooter', 'shooter', 'generator', 'generator', 'normal', 'normal', 'scroll', 'scroll']) // prettier-ignore
   })
 
   it('refuses, with a reason, when a test is missing or two bounds disagree', () => {
-    expect(loadClasses(cart({ skipShooter: true }))).toMatchObject({ ok: false, reason: expect.stringContaining('shooter') }) // prettier-ignore
-    expect(loadClasses(cart({ scrollSub: 0xa1 }))).toMatchObject({ ok: false, reason: expect.stringContaining('scroll') }) // prettier-ignore
-    expect(loadClasses(RomFile.fromBytes('x.sfc', Buffer.alloc(0x80000)))).toMatchObject({ ok: false }) // prettier-ignore
+    expect(loadClasses(cart({ skipShooter: true }))).toMatchObject({ status: 'unavailable', reason: expect.stringContaining('shooter') }) // prettier-ignore
+    expect(loadClasses(cart({ scrollSub: 0xa1 }))).toMatchObject({ status: 'unavailable', reason: expect.stringContaining('scroll') }) // prettier-ignore
+    expect(loadClasses(RomFile.fromBytes('x.sfc', Buffer.alloc(0x80000)))).toMatchObject({ status: 'unavailable' }) // prettier-ignore
   })
 })
