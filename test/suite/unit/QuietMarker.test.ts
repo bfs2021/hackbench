@@ -264,6 +264,7 @@ const P = 0x150 // the platforms test
 const G = 0x1a0 // the generator test
 const SH = 0x1b4 // the shooter test, 20 bytes past the generator test
 const AFTER = G + 20 // where the generator's upper-bound branch lands: just past its block, on the next compare (here the shooter test)
+const LS = 0x1000 // the shooter loader's opening, which the shooter test's call (operand $9000) must reach
 const NEXT = 0x164 // where both generator and shooter paths go on: the branch to the next sprite
 // The Eeries/platforms test shape with operands (compare value, saved-index cell, call target) unlike the game's,
 // so no 8-byte run of the fixture is a run of the vanilla ROM (D126); the reader takes only the opcodes and the hops.
@@ -297,6 +298,7 @@ function cart(
   put(G, [0xc9, 0x50, 0x90, rel(G + 2, SH), 0xc9, 0x60, 0xb0, rel(G + 6, AFTER), 0x38, 0xe9, 0x50, 0x1a, 0x8d, 0x9a, 0x12, 0x9e, 0x11, 0x12, 0x80, rel(G + 18, NEXT)]) // prettier-ignore
   put(SH, [0xc9, 0x4b, 0x90, 0x05, 0x20, 0x00, 0x90, 0x80, rel(SH + 7, NEXT), 0xa9, 0x01])
   put(NEXT, [0x80, rel(NEXT, LN)])
+  put(LS, [0x86, 0x09, 0x88, 0x84, 0x0a, 0x85, 0x0b, 0xa2, 0x05, 0xbd, 0x11, 0x14, 0xf0, 0x0e, 0xca, 0x10, 0xf4]) // prettier-ignore
   edit(put, buf)
   return RomFile.fromBytes('x.sfc', buf)
 }
@@ -337,6 +339,38 @@ const GATES: [string, (put: (at: number, b: number[]) => void) => void, RegExp][
     'Eeries test takes the scroll bound itself',
     put => put(E + 1, [0xa0]),
     /Eeries or platform test/,
+  ],
+  [
+    'shooter call repointed to another routine',
+    put => put(SH + 5, [0x00, 0x91]),
+    /shooter test calls/,
+  ],
+  ['shooter call points past the bank', put => put(SH + 5, [0xfe, 0xff]), /shooter test calls/],
+  [
+    'shooter loader opening cut off by the end of the bank',
+    // 16 of its 17 bytes fit; the last is a wildcard that would "match" off the end if reads were not bounded
+    put => (
+      put(
+        0x7ff0,
+        [
+          0x86, 0x09, 0x88, 0x84, 0x0a, 0x85, 0x0b, 0xa2, 0x05, 0xbd, 0x11, 0x14, 0xf0, 0x0e, 0xca,
+          0x10,
+        ],
+      ),
+      put(SH + 5, [0xf0, 0xff])
+    ),
+    /shooter test calls/,
+  ],
+  ['shooter call points below the bank', put => put(SH + 5, [0x00, 0x40]), /shooter test calls/],
+  [
+    'entry skips land on the first byte of the Eeries test',
+    put => (put(S + 9, [rel(S + 8, E)]), put(S + 14, [rel(S + 13, E)])),
+    /load start does not skip/,
+  ],
+  [
+    'entry first skip lands on a return byte inside a matched shape',
+    put => (put(S + 3, [0x60]), put(S + 1, [rel(S, S + 3)])),
+    /load start does not skip/,
   ],
   ['the next-sprite branch is not a branch', put => put(NEXT, [0xea]), /go on to the next sprite/],
   [
@@ -386,6 +420,7 @@ const OPCODES: Record<string, { at: number[]; idx: number[] }> = {
   loaderCall: { at: [E, P], idx: [0, 2, 4, 5, 6, 7, 9] },
   generator: { at: [G], idx: [0, 2, 4, 6, 8, 9, 11, 12, 15, 18] },
   shooter: { at: [SH], idx: [0, 2, 4, 7, 9] },
+  loadShooter: { at: [LS], idx: [0, 2, 3, 5, 7, 9, 12, 14, 15] },
 }
 /** One case per opcode position, copy and change (a flip and a near-miss), each its own test. */
 const OPCODE_CASES: [string, number, number, number][] = Object.entries(OPCODES).flatMap(
@@ -424,7 +459,7 @@ describe('LoadClass reads the loader from its operands', () => {
   )
 
   it('the opcode positions are exactly the non-operand bytes of the shapes, and every one is a case', () => {
-    expect(OPCODE_CASES.length).toBe(2 * (25 + 2 * 7 + 10 + 5))
+    expect(OPCODE_CASES.length).toBe(2 * (25 + 2 * 7 + 10 + 5 + 9))
     for (const [name, shape] of Object.entries(SHAPES))
       expect(
         shape.flatMap((w, i) => (w === null ? [] : [i])),
@@ -454,7 +489,7 @@ describe('LoadClass reads the loader from its operands', () => {
 
   it('a hook patched over the routine start reads unavailable', () => {
     expect(reasonOf(cart(put => put(S, [0x5c, 0x00, 0x90, 0x02])))).toMatch(
-      /scroll test was found 0/,
+      /routine start before the scroll test/,
     ) // a JML over the entry
   })
   it('a second copy of a shape makes the read ambiguous (first of many is not taken)', () => {
