@@ -68,8 +68,8 @@ function find(code: Uint8Array, want: (number | null)[]): number[] {
   return hits
 }
 
-/** The byte at `i`, or -1 past either end of the bank (so every comparison on it fails and the read refuses). */
-const byteAt = (code: Uint8Array, i: number) => code[i] ?? -1
+/** The byte at `i`, or 0 past either end of the bank: no shape or check here accepts a 0 (they compare against opcodes, or only after a bounded match), so a read off the end refuses. */
+const byteAt = (code: Uint8Array, i: number) => code[i] ?? 0
 
 /** Where the branch whose opcode is at `at` lands (a displacement off the end of the bank lands nowhere useful). */
 const target = (code: Uint8Array, at: number) => {

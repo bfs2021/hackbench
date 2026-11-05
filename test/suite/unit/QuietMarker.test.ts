@@ -427,7 +427,15 @@ const OPCODE_CASES: [string, number, number, number][] = Object.entries(OPCODES)
   ([name, { at, idx }]) =>
     at.flatMap(base =>
       idx.flatMap(i =>
-        [0xff, 0x04].map(c => [name, base, i, c] as [string, number, number, number]),
+        [0xff, 0x04].map(
+          c =>
+            [`${name}[${i}] at $${base.toString(16)} ^$${c.toString(16)}`, base, i, c] as [
+              string,
+              number,
+              number,
+              number,
+            ],
+        ),
       ),
     ),
 )
@@ -451,8 +459,8 @@ describe('LoadClass reads the loader from its operands', () => {
   })
 
   it.each(OPCODE_CASES)(
-    'opcode %s at +%i: a flip or a near-miss makes the read unavailable',
-    (name, base, i, change) => {
+    'opcode %s: a flip or a near-miss makes the read unavailable',
+    (_title, base, i, change) => {
       const rom = cart((_put, buf) => (buf[0x10000 + base + i]! ^= change))
       expect(reasonOf(rom)).not.toBe('ok')
     },
