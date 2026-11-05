@@ -264,7 +264,7 @@ const P = 0x150 // the platforms test
 const G = 0x1a0 // the generator test
 const SH = 0x1b4 // the shooter test, 20 bytes past the generator test
 const AFTER = G + 20 // where the generator's upper-bound branch lands: just past its block, on the next compare (here the shooter test)
-const NEXT = 0x1d0 // where both generator and shooter paths go on: the branch to the next sprite
+const NEXT = 0x164 // where both generator and shooter paths go on: the branch to the next sprite
 // The Eeries/platforms test shape with operands (compare value, saved-index cell, call target) unlike the game's,
 // so no 8-byte run of the fixture is a run of the vanilla ROM (D126); the reader takes only the opcodes and the hops.
 const call = (at: number, cmp: number, cell: number, to: number[], hop: number) => [
@@ -288,15 +288,15 @@ function cart(
   buf[0x7fd5] = 0x20
   const put = (at: number, bytes: number[]) => buf.set(bytes, 0x10000 + at)
   put(S, [...ENTRY, 0xc9, 0xa0, 0x90, rel(SC + 2, E), 0xad, 0x34, 0x12, 0x0d, 0x56, 0x12, 0xd0, rel(SC + 10, GUARD), 0x5a, 0xda, 0xa5, 0x05, 0x38, 0xe9, 0xa0, 0x8d, 0x78, 0x12]) // prettier-ignore
-  put(GUARD, [0x80, 0x00])
+  put(GUARD, [0x80, rel(GUARD, LN)])
   put(RET, [0x60])
   put(LN, [0xe8])
-  put(E, call(E, 0xd3, 0x07, [0x34, 0x92], P))
-  put(P, call(P, 0xd7, 0x09, [0x56, 0x93], G))
+  put(E, call(E, 0x73, 0x07, [0x34, 0x92], P))
+  put(P, call(P, 0x77, 0x09, [0x56, 0x93], G))
   // generators 0x50..0x5f; shooters 0x4b..0x4f: a gap of 5 below the generator bound, unlike the game's.
   put(G, [0xc9, 0x50, 0x90, rel(G + 2, SH), 0xc9, 0x60, 0xb0, rel(G + 6, AFTER), 0x38, 0xe9, 0x50, 0x1a, 0x8d, 0x9a, 0x12, 0x9e, 0x11, 0x12, 0x80, rel(G + 18, NEXT)]) // prettier-ignore
   put(SH, [0xc9, 0x4b, 0x90, 0x05, 0x20, 0x00, 0x90, 0x80, rel(SH + 7, NEXT), 0xa9, 0x01])
-  put(NEXT, [0x80, 0x00])
+  put(NEXT, [0x80, rel(NEXT, LN)])
   edit(put, buf)
   return RomFile.fromBytes('x.sfc', buf)
 }
@@ -331,7 +331,30 @@ const GATES: [string, (put: (at: number, b: number[]) => void) => void, RegExp][
   ],
   ['generator skip-on hop elsewhere', put => put(G + 19, [0x00]), /go on to the next sprite/],
   ['shooter skip-on hop elsewhere', put => put(SH + 8, [0x00]), /go on to the next sprite/],
+  ['Eeries test takes a shooter-band id', put => put(E + 1, [0x4c]), /Eeries or platform test/],
+  ['platform test takes a generator-band id', put => put(P + 1, [0x52]), /Eeries or platform test/],
+  [
+    'Eeries test takes the scroll bound itself',
+    put => put(E + 1, [0xa0]),
+    /Eeries or platform test/,
+  ],
   ['the next-sprite branch is not a branch', put => put(NEXT, [0xea]), /go on to the next sprite/],
+  [
+    'the next-sprite branch goes nowhere (displacement 0)',
+    put => put(NEXT + 1, [0x00]),
+    /go on to the next sprite/,
+  ],
+  [
+    'scroll guard goes backward to a branch before the scroll test',
+    put => (put(0xb8, [0x80, rel(0xb8, LN)]), put(SC + 11, [rel(SC + 10, 0xb8)])),
+    /guard does not skip/,
+  ],
+  ['scroll guard branch goes elsewhere', put => put(GUARD + 1, [0x00]), /guard does not skip/],
+  [
+    'scroll guard lands on the first byte of the store operand',
+    put => (put(SC + 20, [0x80, rel(SC + 20, LN)]), put(SC + 11, [rel(SC + 10, SC + 20)])),
+    /guard does not skip/,
+  ],
   ['entry first skip is not a return', put => put(RET, [0xea]), /load start does not skip/],
   [
     'entry skips land in different places',
@@ -354,7 +377,7 @@ const GATES: [string, (put: (at: number, b: number[]) => void) => void, RegExp][
   ['Eeries branch elsewhere', put => put(E + 3, [0x02]), /does not lead through/],
   ['platforms branch elsewhere', put => put(P + 3, [0x02]), /does not lead through/],
   ['shooter bound not below generator', put => put(SH + 1, [0x55]), /not in an order/],
-  ['generator end past the scroll bound', put => put(G + 5, [0xb0]), /not in an order/],
+  ['generator end past the scroll bound', put => put(G + 5, [0xb0]), /Eeries or platform test/],
 ]
 
 /** Positions are written out here, not walked from SHAPES: nulling an opcode in the code under test must fail these. */
@@ -409,11 +432,12 @@ describe('LoadClass reads the loader from its operands', () => {
       ).toEqual(OPCODES[name]!.idx)
   })
 
-  it('the order gate is exact: generator end above its start and not past the scroll bound', () => {
+  it('the order gate is exact: generator end above its start, with room before the scroll bound for the Eeries and platform ids', () => {
     expect(reasonOf(cart(put => put(G + 5, [0x50])))).toMatch(/not in an order/) // end == start
     expect(reasonOf(cart(put => put(G + 5, [0x40])))).toMatch(/not in an order/) // end < start
-    expect(reasonOf(cart(put => put(G + 5, [0xa0])))).toBe('ok') // end == scroll bound is legal: the bands touch
-    expect(reasonOf(cart(put => put(G + 5, [0xa1])))).toMatch(/not in an order/)
+    expect(reasonOf(cart(put => put(G + 5, [0xa0])))).toMatch(/Eeries or platform test/) // end == scroll bound: no room left
+    expect(reasonOf(cart(put => put(G + 5, [0xa1])))).toMatch(/Eeries or platform test/)
+    expect(reasonOf(cart(put => put(G + 5, [0x74])))).toMatch(/Eeries or platform test/) // end below the ids the two tests take
     expect(reasonOf(cart(put => put(SH + 1, [0x50])))).toMatch(/not in an order/) // shooter start == generator start
   })
 
@@ -421,7 +445,7 @@ describe('LoadClass reads the loader from its operands', () => {
     // The Eeries test moves ahead of the scroll test: the scroll test's branch goes backward.
     const E2 = 0xe0
     const moved = (put: (at: number, b: number[]) => void) => {
-      put(E2, call(E2, 0xd3, 0x07, [0x34, 0x92], P))
+      put(E2, call(E2, 0x73, 0x07, [0x34, 0x92], P))
       put(SC + 3, [rel(SC + 2, E2)])
     }
     expect(reasonOf(cart(moved))).toBe('ok')

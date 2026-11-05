@@ -14,9 +14,11 @@
  * number each. Any other shape is `status: 'unavailable'`, with the reason, and the caller then treats the id as an
  * ordinary sprite.
  * Every branch in the chain has its DESTINATION read, not just its opcode: the three hops above, the generator's upper-bound
- * branch (it must skip the whole generator path), the generator's and shooter's skip-on branches (both to one branch on to the
- * next sprite), the entry's three skips and the scroll guard. The two call targets (the loader subroutines the Eeries, platform
- * and shooter tests call) are not checked: they do not decide which class an id has.
+ * branch (it must skip the whole generator path), and every exit toward the next sprite, which must resolve to ONE proven
+ * place: the entry's two skips land on it, and the generator tail, the shooter tail and the scroll guard are each a BRA to it,
+ * landing outside every matched shape (an operand byte can look like a BRA). The ids the Eeries and platform tests take must
+ * lie between the generator band and the scroll bound. The two call targets (the subroutines the Eeries, platform and
+ * shooter tests call) are not checked: they do not decide which class an id has.
  * Not checked: what reaches that first instruction. The loop that calls it has no ROM address that is not itself a
  * constant, so a patch that diverts control before it, to a copy elsewhere, is not seen.
  */
@@ -32,9 +34,9 @@ const BANK2 = 0x028000
 /** The entry's fall-through into the scroll test: skip unless at the screen boundary and not loaded yet, mark loaded, store the number. */
 const ENTRY = [0xd0, null, 0xb7, null, 0x29, 0xf0, 0xc5, null, 0xd0, null, 0xbd, null, null, 0xd0, null, 0x86, null, 0xfe, null, null, 0xc8, 0xb7, null, 0x85, null, 0x88] // prettier-ignore
 /** Then CMP, BCC, the scroll-command store. */
-const SCROLL = [...ENTRY, 0xc9, null, 0x90, null, 0xad, null, null, 0x0d, null, null, 0xd0, null, 0x5a, 0xda, 0xa5, null, 0x38, 0xe9, null, 0x8d] // prettier-ignore
+const SCROLL = [...ENTRY, 0xc9, null, 0x90, null, 0xad, null, null, 0x0d, null, null, 0xd0, null, 0x5a, 0xda, 0xa5, null, 0x38, 0xe9, null, 0x8d, null, null] // prettier-ignore
 /** The Eeries and platforms tests: CMP, BNE past a call that saves X and Y. */
-const LOADER_CALL = [0xc9, null, 0xd0, null, 0x5a, 0xda, 0x88, 0x84, null, 0x20] // prettier-ignore
+const LOADER_CALL = [0xc9, null, 0xd0, null, 0x5a, 0xda, 0x88, 0x84, null, 0x20, null, null] // prettier-ignore
 /** Compare, below-range branch, upper compare, upper-bound branch, the generator number store, free the slot, skip to the next sprite. */
 const GENERATOR = [0xc9, null, 0x90, null, 0xc9, null, 0xb0, null, 0x38, 0xe9, null, 0x1a, 0x8d, null, null, 0x9e, null, null, 0x80, null] // prettier-ignore
 const SHOOTER = [0xc9, null, 0x90, null, 0x20, null, null, 0x80, null, 0xa9] // prettier-ignore
@@ -104,28 +106,32 @@ function read(rom: RomFile): LoadClasses {
   const past = ge + GENERATOR.length
   if (target(code, ge + 6) !== past)
     return fail('the generator test upper bound does not skip past the generator path')
-  // The "skip this sprite" hops: the generator's and the shooter's both land on one branch that moves to the next sprite.
-  const next = target(code, ge + 18)
-  if (target(code, sh + 7) !== next || code[next] !== 0x80)
-    return fail('the generator and shooter paths do not both go on to the next sprite')
-  // The entry's skips: the first returns, the other two land on one place outside this routine.
-  const [skip, end] = [target(code, s as number), (s as number) + SCROLL.length]
-  const out = target(code, (s as number) + 8)
-  if (
-    code[skip] !== 0x60 ||
-    out !== target(code, (s as number) + 13) ||
-    (out >= (s as number) && out < end)
-  )
+  // One proven way on to the next sprite, `ln`: the entry's two skips land there, and every other exit (generator tail, shooter
+  // tail, scroll guard) must be a BRA to it. No exit may land inside a matched shape (an operand byte can look like a BRA).
+  const [skip, ln] = [target(code, s as number), target(code, (s as number) + 8)]
+  const spans = [[s as number, (s as number) + SCROLL.length], [eeries, eeries + LOADER_CALL.length], [platforms, platforms + LOADER_CALL.length], [ge, ge + GENERATOR.length], [sh, sh + SHOOTER.length]] // prettier-ignore
+  const inside = (a: number) => spans.some(([lo, hi]) => a > lo! && a < hi!)
+  const viaBra = (a: number) => code[a] === 0x80 && target(code, a) === ln && !inside(a)
+  if (code[skip] !== 0x60 || ln !== target(code, (s as number) + 13) || inside(ln) || inside(skip))
     return fail('the sprite load start does not skip the way the loader does')
-  // The scroll store's guard skips past the store, onto the branch to the next sprite.
+  const next = target(code, ge + 18)
+  if (target(code, sh + 7) !== next || !viaBra(next))
+    return fail('the generator and shooter paths do not both go on to the next sprite')
   const guard = target(code, sc + 10)
-  if (code[guard] !== 0x80 || guard < sc + SCROLL.length - ENTRY.length)
+  if (!viaBra(guard) || guard <= sc)
     return fail('the scroll command guard does not skip past its store')
   if (target(code, sh + 2) !== sh + 9)
     return fail('the shooter test does not hand lower ids on to the sprite slots')
   const shootFrom = code[sh + 1]!
-  if (!(shootFrom < genFrom && genFrom < genTo && genTo <= scrollFrom))
+  if (!(shootFrom < genFrom && genFrom < genTo))
     return fail('the loader tests are not in an order this reader knows')
+  // The ids the Eeries and platform tests take are loaded by their own routines, so they must sit between the generator band
+  // and the scroll bound: one inside the shooter or generator band would be a class this reader would call wrongly.
+  for (const id of [code[eeries + 1]!, code[platforms + 1]!])
+    if (id < genTo || id >= scrollFrom)
+      return fail(
+        'the Eeries or platform test takes ids from outside the range between the generators and the scroll commands',
+      )
   return {
     status: 'ok',
     of: id =>
