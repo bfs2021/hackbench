@@ -14,9 +14,10 @@
  * Each run must read the entry's id before it writes or returns, and the table must hold both routed and normal ids, or it
  * proves nothing and is unavailable. Within each class the value written must step with the id (id minus a constant),
  * each class must be one run of at least two ids, and the runs must come shooter, generator, scroll; anything else is
- * unavailable (a hack that writes a cell for every id would otherwise read as a class). The sweep runs twice, with extra
- * bit 3 of the entry clear and set, because some hacks move the bands with it (measured); `of(id, true)` says only
- * whether an entry with it set is a scroll command (else `normal`: the gate keeps it). Every run starts from a restored
+ * unavailable (a hack that writes a cell for every id would otherwise read as a class). The scroll ids are then run again
+ * with extra bit 3 of the entry set, because some hacks move the bands with it (measured); `of(id, true)` is `scroll`
+ * only for an id that is a scroll command in both sweeps, storing the same value in the same cell, and `normal` for every
+ * other (the extra-bits gate keeps its box). Every run starts from a restored
  * machine with A, X and Y zero. Seeded: the sprite list pointer and
  * one entry on the screen boundary, the scroll direction that makes that boundary offset zero, DB = 2. Not seen:
  * everything after the first write to a cell (a scroll command's setup call leaves ROM or unbalances the stack on some
@@ -110,11 +111,11 @@ const whyNot = (r: CallResult): string =>
       : 'returned with the stack or the bank wrong'
 
 /** The first thing wrong with the bands the 256 runs gave, or null: some routed and some normal ids, then per class one run of at least two ids, in order, each value stepping with its id. */
-function bandsProblem(rows: Row[], classes: readonly LoadClass[]): string | null {
+function bandsProblem(rows: Row[]): string | null {
   const routed = rows.filter(r => r.cls !== 'normal').length
   if (routed === 0 || routed === rows.length) return 'the runs do not tell routed ids from sprites'
   let after = -1
-  for (const cls of classes) {
+  for (const cls of ['shooter', 'generator', 'scroll'] as const) {
     const ids = rows.flatMap((r, id) => (r.cls === cls ? [id] : []))
     if (!ids.length) continue
     const [first, last] = [ids[0]!, ids[ids.length - 1]!]
@@ -161,10 +162,10 @@ function run(rom: RomFile, entry: number, key: string): LoadClasses {
     throw new Refusal('decided') // the class is known at the first write; what follows is not run
   }
   cache.track(bus, rom)
-  /** The 256 rows for entries with `flags` set, or why the runs prove nothing. */
-  const sweep = (flags: number, classes: readonly LoadClass[]): Row[] | string => {
+  /** One row per id of `ids`, run with `flags` in the entry, or why the runs prove nothing. */
+  const sweep = (flags: number, ids: number[]): Row[] | string => {
     const rows: Row[] = []
-    for (let id = 0; id < 256; id++) {
+    for (const id of ids) {
       bus.restore(seeded) // WRAM, SRAM and the multiply units: no run sees an earlier run's state
       w[LIST_AT + FLAGS_AT] = flags
       w[LIST_AT + ID_AT] = id
@@ -179,22 +180,29 @@ function run(rom: RomFile, entry: number, key: string): LoadClasses {
       else if (returned(r, cpu)) rows.push({ cls: 'normal', value: 0 })
       else return `${at}: ${whyNot(r)}`
     }
-    return bandsProblem(rows, classes) ?? rows
+    return rows
   }
-  // With bit 3 set only the scroll band is read: the gate needs nothing else, and the other bands may not step on hacks.
-  const plain = sweep(0, ['shooter', 'generator', 'scroll'])
-  const bit3 = sweep(EXTRA_BIT_3, ['scroll'])
-  const result: LoadClasses =
-    typeof plain === 'string'
-      ? fail(plain)
-      : {
-          status: 'ok',
-          of: (id, extraBits) =>
-            extraBits
-              ? typeof bit3 !== 'string' && bit3[id]?.cls === 'scroll'
-                ? 'scroll'
-                : 'normal'
-              : (plain[id]?.cls ?? 'normal'),
-        }
+  const plain = sweep(
+    0,
+    Array.from({ length: 256 }, (_, id) => id),
+  )
+  const bad = typeof plain === 'string' ? plain : bandsProblem(plain)
+  if (bad || typeof plain === 'string') return cache.store(rom, key, bus, fail(bad!))
+  // With bit 3 set, only the plain scroll ids are run again: one stays a scroll command only if it stores the same value
+  // in the same cell. Any other id gets no exemption from the extra-bits gate, so its box stays.
+  const scrolls = plain.flatMap((r, id) => (r.cls === 'scroll' ? [id] : []))
+  const again = sweep(EXTRA_BIT_3, scrolls)
+  const exempt = new Set(
+    typeof again === 'string'
+      ? []
+      : scrolls.filter(
+          (id, k) => again[k]!.cls === 'scroll' && again[k]!.value === plain[id]!.value,
+        ),
+  )
+  const result: LoadClasses = {
+    status: 'ok',
+    of: (id, extraBits) =>
+      extraBits ? (exempt.has(id) ? 'scroll' : 'normal') : (plain[id]?.cls ?? 'normal'),
+  }
   return cache.store(rom, key, bus, result)
 }

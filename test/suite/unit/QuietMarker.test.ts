@@ -254,7 +254,7 @@ const TABLE_BIT3 = 0x029200
 const SCROLL_CELL = 0x143e
 const GEN_CELL = 0x18b9
 const SHOOT_SLOTS = 0x1783
-const [NORMAL, SHOOT, GEN, SCROLL] = [0, 1, 2, 3]
+const [NORMAL, SHOOT, GEN, SCROLL, SCROLL_OFFSET] = [0, 1, 2, 3, 4] // the last stores to the scroll cell, but a different value
 const [RTS, BNE_OP, BRA_OP, BEQ_OP] = [0x60, 0xd0, 0x80, 0xf0]
 /** Which class code a table byte holds for an id: shooters 0x30-0x33, generators 0x40-0x4f, scroll commands 0x90 up. */
 const BANDS = (id: number) =>
@@ -278,7 +278,22 @@ interface Plan {
   code?: number[]
 }
 /** A normal id: set the SRAM latch, leave X and Y nonzero, return. */
-const NORMAL_PATH = [0xa9, 0x01, 0x8f, 0x00, 0x00, 0x70, 0xa2, 0x01, 0xa0, 0x01, RTS]
+const NORMAL_PATH = [
+  0xa9,
+  0x05,
+  0xeb,
+  0xa9,
+  0x07,
+  0x8f,
+  0x00,
+  0x00,
+  0x70,
+  0xa2,
+  0x01,
+  0xa0,
+  0x01,
+  RTS,
+]
 /** 255 times round a two-instruction loop: over 500 steps and well under the cap. */
 const LOOP_500 = [0xa2, 0xff, 0xca, BNE_OP, 0xfd]
 /** The same loop nested 255 deep: over 100,000 steps, past the cap. */
@@ -309,7 +324,7 @@ function cart(
     buf.set(bytes, (at & 0x7fff) + ((at >> 16) & 0x3f) * 0x8000)
   const value = (s: Store) => (s === 'id' ? [0x8a] : s === 'offset' ? [0x8a, 0x18, 0x69, 0xf9] : [])
   const tail = (code: number, cell: number): Item[] => [
-    ...value(plan.store?.[code] ?? 'id'),
+    ...value(plan.store?.[code] ?? (code === SCROLL_OFFSET ? 'offset' : 'id')),
     0x8f,
     cell & 0xff,
     cell >> 8,
@@ -323,6 +338,9 @@ function cart(
       0xa5,
       0x14, // the opening the call site's target must have
       ...(plan.mirror ? [0x5c, jump & 0xff, jump >> 8, 0x82] : []),
+      0xeb,
+      BNE_OP,
+      'ret', // stale A high byte (XBA brings it down)
       0xe0,
       0x00,
       BNE_OP,
@@ -367,8 +385,7 @@ function cart(
       0x04,
       0xb7,
       0xe0,
-      0xc9,
-      0xff,
+      0x1a,
       BNE_OP,
       'ret', // the list end
       0xa0,
@@ -379,7 +396,8 @@ function cart(
       ...(plan.bit3
         ? [
             0xa0,
-            0x01,
+            0x00,
+            0xc8,
             0xb7,
             0xe0,
             0x29,
@@ -406,11 +424,17 @@ function cart(
       SCROLL,
       BEQ_OP,
       'scroll',
+      0xc9,
+      SCROLL_OFFSET,
+      BEQ_OP,
+      'offset',
       ...(plan.normal ?? NORMAL_PATH),
       { label: 'shoot' },
       ...tail(SHOOT, plan.shootCell ?? SHOOT_SLOTS + 2),
       { label: 'gen' },
       ...tail(GEN, GEN_CELL),
+      { label: 'offset' },
+      ...tail(SCROLL_OFFSET, SCROLL_CELL),
       { label: 'scroll' },
       ...tail(SCROLL, SCROLL_CELL),
       { label: 'ret' },
@@ -574,6 +598,13 @@ describe('LoadClass runs the loader and reads the class from what it writes', ()
     expect(loadClasses(blank)).toMatchObject({ status: 'unavailable' })
   })
 
+  it('a stepping band of two ids reads ok', () => {
+    const two = (id: number) => (id === 0x32 || id === 0x33 ? NORMAL : BANDS(id))
+    const r = loadClasses(cart({ classes: two }))
+    if (r.status !== 'ok') throw new Error(r.reason)
+    expect([0x30, 0x31, 0x32].map(id => r.of(id))).toEqual(['shooter', 'shooter', 'normal'])
+  })
+
   it('a normal path of a few hundred steps is read, not cut off', () => {
     expect(reasonOf(cart({ normal: [...LOOP_500, ...NORMAL_PATH] }))).toBe('ok')
   })
@@ -589,29 +620,64 @@ describe('LoadClass runs the loader and reads the class from what it writes', ()
 })
 
 describe('LoadClass extra bit 3', () => {
-  it('an entry with the bit set is a scroll command only when a second sweep says so', () => {
-    const r = loadClasses(cart({ bit3: id => (id >= 0xa0 ? SCROLL : NORMAL) }))
+  const withBit = (id: number) => ({ ...sprite(id), raw: [0x08, 0, id] }) as LevelSprite
+  /** The classes of a cart whose second sweep (extra bit 3) routes ids as `bit3` says. */
+  const classesWith = (bit3: (id: number) => number) => {
+    const r = loadClasses(cart({ bit3 }))
     if (r.status !== 'ok') throw new Error(r.reason)
+    return r
+  }
+  const moved = (id: number) => (id >= 0x10 && id < 0x20 ? SCROLL : NORMAL)
+  const onShooters = (id: number) => (id >= 0x30 && id < 0x34 ? SCROLL : BANDS(id))
+
+  it('an entry with the bit set is a scroll command only when the plain sweep and the second sweep both say so', () => {
+    const r = classesWith(id => (id >= 0xa0 ? SCROLL : NORMAL))
     expect([0x95, 0xa0].map(id => r.of(id, true))).toEqual(['normal', 'scroll'])
     expect([0x95, 0xa0].map(id => r.of(id))).toEqual(['scroll', 'scroll'])
   })
 
+  it.each([
+    ['a band the second sweep moved onto plain normal ids', moved, 0x15],
+    ['a band the second sweep put on plain shooters', onShooters, 0x31],
+  ])('%s gets no exemption: its sprite code does not run and the box stays', (_t, bit3, id) => {
+    const r = classesWith(bit3)
+    expect(r.of(id, true)).toBe('normal')
+    const ran: number[] = []
+    const run = (_r: RomFile, i: number) => (ran.push(i), runModel({ refusal: 'spy' }))
+    const real = interpDrawer(cart({ bit3 }), 0, geometry, run, seedFor)
+    const [d] = drawSprites([withBit(id)], model, real, undefined, r.of)
+    expect(d).toMatchObject({ status: 'placeholder', reason: 'extraBits' })
+    expect(ran).toEqual([])
+  })
+
   it('the gate keeps an extra-bits entry the second sweep does not call a scroll command', () => {
-    const r = loadClasses(cart({ bit3: id => (id >= 0xa0 ? SCROLL : NORMAL) }))
-    if (r.status !== 'ok') throw new Error(r.reason)
-    const withBit = (id: number) => ({ ...sprite(id), raw: [0x08, 0, id] }) as LevelSprite
+    const r = classesWith(id => (id >= 0xa0 ? SCROLL : NORMAL))
     const scroll = { ok: false, reason: 'r', routed: 'scroll' } as const
     const results = { 0x95: scroll, 0xa0: scroll }
-    const [moved, kept] = drawSprites([withBit(0x95), withBit(0xa0)], model, draw(results), undefined, r.of) // prettier-ignore
-    expect(moved).toMatchObject({ status: 'placeholder', reason: 'extraBits' })
+    const [lost, kept] = drawSprites(
+      [withBit(0x95), withBit(0xa0)],
+      model,
+      draw(results),
+      undefined,
+      r.of,
+    )
+    expect(lost).toMatchObject({ status: 'placeholder', reason: 'extraBits' })
     expect(kept).toMatchObject({ status: 'quiet', kind: 'scroll' })
   })
 
-  it('a second sweep whose scroll band is broken exempts nothing, and the plain table still reads', () => {
-    const r = loadClasses(cart({ bit3: scrollHole }))
-    if (r.status !== 'ok') throw new Error(r.reason)
-    expect(r.of(0xa0, true)).toBe('normal')
+  it.each([
+    ['a different value in the scroll cell', SCROLL_OFFSET],
+    ['the same value in another cell', GEN],
+  ])('a scroll id that stores %s with the bit set gets no exemption', (_t, code) => {
+    const r = classesWith(id => (id >= 0x90 ? code : NORMAL))
+    expect([0x95, 0xa0].map(id => r.of(id, true))).toEqual(['normal', 'normal'])
     expect(r.of(0xa0)).toBe('scroll')
+  })
+
+  it('a scroll id the second sweep breaks loses only its own exemption, and the plain table still reads', () => {
+    const r = classesWith(scrollHole)
+    expect([0xc0, 0xa0].map(id => r.of(id, true))).toEqual(['normal', 'scroll'])
+    expect(r.of(0xc0)).toBe('scroll')
   })
 
   it('the other bands may be anything with the bit set', () => {
