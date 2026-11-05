@@ -6,8 +6,8 @@
  * The class bounds are read from the compare operands of that routine, never held as constants here
  * (.claude/rules/rom-interpretation.md): each test is found by its opcode shape in bank 2, must match exactly
  * once, and must agree with its neighbours (the scroll compare and subtract carry the same bound, the
- * generator's low branch lands on the shooter test). Any other shape is `status: 'unavailable'`, with the reason, and the
- * caller then treats the id as an ordinary sprite.
+ * generator's low branch lands on the shooter test). Any other shape is `status: 'unavailable'`, with the reason, and
+ * the caller then treats the id as an ordinary sprite.
  */
 import type { RomFile } from '../../RomFile'
 

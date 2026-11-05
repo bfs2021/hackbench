@@ -77,13 +77,12 @@ describe('the marker', () => {
     expect(a(7, 7)).toBe(255)
     expect(a(1, 7) + a(14, 7) + a(7, 1) + a(7, 14)).toBeGreaterThan(0)
     const lum = (c: number[]) => c[0]! + c[1]! + c[2]!
-    const colors = new Set<number>()
-    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) if (a(x, y)) colors.add(lum(px(x, y)))
+    const colors: number[] = []
+    for (let y = 0; y < 16; y++)
+      for (let x = 0; x < 16; x++) if (a(x, y)) colors.push(lum(px(x, y)))
     expect(Math.max(...colors)).toBeGreaterThan(600)
     expect(Math.min(...colors)).toBeLessThan(150)
-    let lit = 0
-    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) if (a(x, y)) lit++
-    expect(lit).toBeLessThan(120)
+    expect(colors.length).toBeLessThan(120)
   })
 
   it('is hit anywhere in its box, the clear interior included, and the screen door skips it', () => {
