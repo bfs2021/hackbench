@@ -2,13 +2,13 @@
  * The quiet marker (#1011): placed items the game draws nothing for show a thin ring with a clear interior, not the
  * framed id box, and say why in plain words.
  *
- * Two parts. (1) Vanilla ROM, skipped without it: map $126 has sixteen $C9 shooters (twelve of them on Map16 tile $141, per the issue). The node reply
+ * Two parts. (1) Vanilla ROM, skipped without it: map $126 has sixteen $C9 shooters, all on Map16 tile $141 (the issue says twelve; the map data has sixteen). The node reply
  * marks each quiet with the shooter words; on the canvas the pixels INSIDE the ring equal the same pixels with the
  * sprite layer hidden (an opaque marker turns that red), while the ring pixels differ (a missing marker turns that red).
  * (2) No ROM: there is no route for a synthetic ROM into the project service (it needs a cart file on disk that the
  * level loader can run), so the closest equivalent is a canned `mapSprites` reply, as map-far-end-gutter.spec.cjs does:
  * a quiet scroll command whose bitmap is nearly clear. It checks the VIEW: the hover text, that the clear interior
- * hovers and selects, and that the screen door never dithers it. The marker's own pixels are asserted by
+ * hovers and selects. The screen door and the priority are unit tests'. The marker's own pixels are asserted by
  * test/suite/unit/QuietMarker.test.ts, not here.
  *
  * Planted defects for the verifier (each turns the named case red):
@@ -147,19 +147,19 @@ test.describe('vanilla ROM, map $126', () => {
     for (const s of r.sprites.filter(x => x.id === 0xc9)) {
       const [mapW, mapH] = [r.width * r.screenCount, r.height]
       const toggle = page.locator(`${rootOf(SLOT)} [data-control="layer-sprites"]`)
-      const clipOf = async (lx, ly, w, h) => {
-        const p = await locate(page, SLOT, mapW, mapH, s.x + lx, s.y + ly)
-        await page.mouse.move(0, 0)
-        return {
-          x: Math.round(p.x),
-          y: Math.round(p.y),
-          width: Math.round(p.z * w),
-          height: Math.round(p.z * h),
-        }
-      }
+      // One scroll position for both clips: `locate` scrolls the pixel to the middle of the view, so a second call
+      // would move the first clip. The offsets inside the box are plain arithmetic on the zoom.
+      const origin = await locate(page, SLOT, mapW, mapH, s.x, s.y)
+      await page.mouse.move(0, 0)
+      const clipOf = (lx, ly, w, h) => ({
+        x: Math.round(origin.x + lx * origin.z),
+        y: Math.round(origin.y + ly * origin.z),
+        width: Math.round(w * origin.z),
+        height: Math.round(h * origin.z),
+      })
       // Local pixels x 3..5, y 7..8 are inside the ring (clear); x 1..2, y 7..8 are the ring and its edge.
       const shots = async () => {
-        const [inside, ring] = [await clipOf(3, 7, 3, 2), await clipOf(0, 7, 3, 2)]
+        const [inside, ring] = [clipOf(3, 7, 3, 2), clipOf(0, 7, 3, 2)]
         return [await page.screenshot({ clip: inside }), await page.screenshot({ clip: ring })]
       }
       const [insideOn, ringOn] = await shots()

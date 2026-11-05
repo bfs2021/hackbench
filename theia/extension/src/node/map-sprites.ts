@@ -231,6 +231,8 @@ function ring(): Uint8ClampedArray {
   return out
 }
 const RING = base64(ring())
+/** Priority 3 everywhere: the ring sits above every tile, so a high-priority tile never hides it (it is see-through, so it hides nothing). */
+const RING_PRIORITY = base64(new Uint8ClampedArray(MARK * MARK).fill(3))
 
 function quiet(s: LevelSprite, reason: string, kind: LoadClass | undefined): MapSpriteDto {
   const [x, y] = [pixelX(s), s.y * TILE]
@@ -241,6 +243,7 @@ function quiet(s: LevelSprite, reason: string, kind: LoadClass | undefined): Map
     y,
     box: { x0: x, y0: y, x1: x + MARK, y1: y + MARK },
     rgba: RING,
+    priority: RING_PRIORITY,
     status: 'quiet',
     reason,
     ...(kind && kind !== 'normal' ? { kind } : {}),
@@ -297,12 +300,15 @@ export function drawSprites(
   model: SpriteModel,
   draw: SpriteDrawer,
   dynamic: (note: PaletteNote) => RgbaColor[] = () => [],
+  /** How the game's loader routes an id (LoadClass.ts), when readable: a routed scroll command keeps its extra bits. */
+  routedOf?: (id: number) => LoadClass,
 ): MapSpriteDto[] {
   /** One sprite's bitmap from a drawer result: its parts blitted at the anchor, or the marker when it cannot be drawn. */
   const render = (s: LevelSprite, res: SpriteDrawResult): MapSpriteDto => {
     // The one place a quiet verdict is made, on the final result (after any step that may still reveal a drawing): a run that
     // ended empty, or an id the game's loader never runs as a sprite. Everything else that did not draw stays the failure box.
-    if (!res.ok && (('empty' in res && res.empty) || ('routed' in res && res.routed))) return quiet(s, res.reason, 'routed' in res ? res.routed : undefined) // prettier-ignore
+    // An empty run on a generic (unverified) seed may only lack state, so it keeps the box and its warning.
+    if (!res.ok && (('routed' in res && res.routed) || ('empty' in res && res.empty && !res.unverified))) return quiet(s, res.reason, 'routed' in res ? res.routed : undefined) // prettier-ignore
     if (!res.ok) return placeholder(s, 'reason' in res ? res.reason : res.failure.kind, 'unverified' in res ? res.unverified : undefined) // prettier-ignore
     if (res.parts.length === 0) return placeholder(s, 'noParts')
     let unverified = 'unverified' in res ? res.unverified : undefined
@@ -369,10 +375,11 @@ export function drawSprites(
   // Sprites a parent drew (the $9B a $9C picks up, #1049) are part of the parent's picture, not unexplained.
   const claimed = new Map<number, { parent: number; res: SpriteDrawResult; parts: DrawPart[] }>()
   const dtos = sprites.map((s): MapSpriteDto => {
+    // Fail closed: a possibly custom sprite is never given vanilla art, and its code is not run. A scroll command is exempt:
+    // the game reads those bits as its scroll data (bank_02.asm:5301-5305), and it has no art to get wrong.
+    if ((s.raw[0] ?? 0) & EXTRA_BITS && routedOf?.(s.spriteId) !== 'scroll')
+      return placeholder(s, 'extraBits')
     const res = draw(s)
-    // Fail closed: a possibly custom sprite is never given vanilla art. A scroll command is exempt: the game reads those
-    // bits as its scroll data (bank_02.asm:5301-5305), and it has no art to get wrong.
-    if ((s.raw[0] ?? 0) & EXTRA_BITS && !(!res.ok && 'routed' in res && res.routed === 'scroll')) return placeholder(s, 'extraBits') // prettier-ignore
     if (res.ok) for (const c of res.children ?? []) claimed.set(c.index, { parent: s.index, res, parts: c.parts }) // prettier-ignore
     return render(s, res)
   })
@@ -985,11 +992,16 @@ export function spriteLayer(
   model: SpriteModel & { isVertical: boolean; screenCount: number },
   draw: SpriteDrawer,
   dynamic?: (note: PaletteNote) => RgbaColor[],
+  routedOf?: (id: number) => LoadClass,
 ): Extract<MapSpritesResult, { status: 'ok' }> {
   const { w, h } = screenTiles(model.isVertical)
-  const sprites = drawSprites(parseLevelSprites(data, model.isVertical), model, draw, dynamic).map(
-    named,
-  )
+  const sprites = drawSprites(
+    parseLevelSprites(data, model.isVertical),
+    model,
+    draw,
+    dynamic,
+    routedOf,
+  ).map(named)
   return {
     status: 'ok',
     orientation: model.isVertical ? 'vertical' : 'horizontal',
@@ -1076,7 +1088,8 @@ function compute(
     // Read (and cached on the cart) only when a drawn sprite points Mario's tile DMA at the buffer.
     const withUploads = { ...model, playerGraphics: () => readMarioGraphics(rom.rom) }
     const dynamic = dynamicOf(rom.rom)
-    const layer = spriteLayer(data, withUploads, draw, dynamic)
+    const classes = loadClasses(rom.rom)
+    const layer = spriteLayer(data, withUploads, draw, dynamic, classes.status === 'ok' ? classes.of : undefined) // prettier-ignore
     const flames = castleFlameSprites(rom.rom, base, stream, model, model.l2?.ok ? model.l2.l2.dy : undefined, dynamic) // prettier-ignore
     if (flames.sprites.length === 0 && !flames.note) return layer
     return {
@@ -1111,7 +1124,8 @@ export function framesOf(
   model: SpriteModel,
   dynamic?: (note: PaletteNote) => RgbaColor[],
 ): { frames: MapSpriteDto[]; reason?: string } {
-  if ('direct' in run) return { frames: [], reason: 'it is drawn by a special routine' }
+  if ('direct' in run)
+    return { frames: [], reason: !run.direct.ok && 'routed' in run.direct && run.direct.routed ? 'it has no picture' : 'it is drawn by a special routine' } // prettier-ignore
   const { m, fixed } = run
   const ref = m.chosen === undefined ? undefined : m.passes[m.chosen]
   if (!ref || !ref.parts.length) {

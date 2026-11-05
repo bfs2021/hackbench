@@ -164,8 +164,9 @@ stream index) picks the winner, as before #795; the game's OAM slot
 assignment between sprites is not modelled.
 
 A marker (a sprite the interpreter refused) has no OAM entry and keeps
-priority 2. So does the quiet marker (#1011), a ring with a clear interior;
-it is exempt from the screen door below, so the tile under it is never dimmed or dithered.
+priority 2. The quiet marker (#1011), a ring with a clear interior, is the exception: it
+is set to priority 3 (above every tile, including Layer 1 high), because it is see-through and hides nothing,
+and it is exempt from the screen door below, so it is never dithered.
 
 ## A covered sprite pixel is not hidden (editor ruling D52, not hardware)
 

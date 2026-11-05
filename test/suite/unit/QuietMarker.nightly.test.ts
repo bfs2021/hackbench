@@ -1,36 +1,50 @@
 /**
  * The vanilla sweep for #1011: which placed items moved from the framed id box to the quiet marker, by id, over all 512
- * maps of the vanilla ROM (about 90 s, one machine, 2026-11-05). Pinned, so a change in what is quiet shows. $C7 is left
- * out of the pin: it moves under the reveal work (#1132). Set QUIET_SWEEP_OUT to also write the table to a file.
+ * maps of the vanilla ROM (about 90 s, one machine, 2026-11-05). Only the ROUTED rows (shooter, generator, scroll
+ * command: classes the game's loader reads, not a verdict on a run) are pinned, and each must be quiet; a routed id is
+ * never a failure box, except a non-scroll one with the extra bits set, which stays boxed on purpose (it may be custom).
+ * The empty-run rows ($4D, $4E, $A8 and the rest) move with the reveal work (#1132), so they are printed, not pinned:
+ * set QUIET_SWEEP_OUT to write the whole table to a file.
  */
 import { readFileSync, writeFileSync } from 'fs'
 import { describe, it, expect } from 'vitest'
+import { RomFile } from '../../../src/rom/RomFile'
+import { loadClasses } from '../../../src/rom/sprites/interp/LoadClass'
 import { mapSprites } from '../../../theia/extension/src/node/map-sprites'
 import { L1ModelCache } from '../../../theia/extension/src/node/map-screen'
 import { VANILLA, hasRom, romPath } from '../support/corpus'
 
 describe.skipIf(!hasRom(VANILLA))('quiet marker sweep, vanilla', () => {
-  it('lists the quiet items by id and kind', { timeout: 600_000 }, () => {
-    const bytes = new Uint8Array(readFileSync(romPath(VANILLA)))
-    const cache = new L1ModelCache()
-    const by = new Map<string, number>()
-    for (let map = 0; map < 0x200; map++) {
-      const r = mapSprites(cache, bytes, romPath(VANILLA), map)
-      if (r.status !== 'ok') continue
-      for (const s of r.sprites.filter(s => s.status === 'quiet')) {
-        const k = `${s.id.toString(16)} ${s.kind ?? 'other'}`
-        by.set(k, (by.get(k) ?? 0) + 1)
+  it(
+    'pins the routed quiet rows by id and kind, and no routed id is a failure box',
+    { timeout: 600_000 },
+    () => {
+      const bytes = new Uint8Array(readFileSync(romPath(VANILLA)))
+      const classes = loadClasses(RomFile.fromBytes('x.sfc', Buffer.from(bytes)))
+      if (classes.status !== 'ok') throw new Error(classes.reason)
+      const cache = new L1ModelCache()
+      const all = new Map<string, number>()
+      const routedBoxes: string[] = []
+      for (let map = 0; map < 0x200; map++) {
+        const r = mapSprites(cache, bytes, romPath(VANILLA), map)
+        if (r.status !== 'ok') continue
+        for (const s of r.sprites) {
+          const cls = classes.of(s.id)
+          if (cls !== 'normal' && s.status !== 'quiet' && s.status !== 'drawn' && !(s.reason === 'extraBits' && cls !== 'scroll')) routedBoxes.push(`${map.toString(16)}#${s.index} ${s.id.toString(16)} ${s.reason}`) // prettier-ignore
+          if (s.status !== 'quiet') continue
+          const k = `${s.id.toString(16)} ${s.kind ?? 'other'}`
+          all.set(k, (all.get(k) ?? 0) + 1)
+        }
       }
-    }
-    const table = [...by].sort().map(([k, n]) => `${k} x${n}`)
-    if (process.env.QUIET_SWEEP_OUT) writeFileSync(process.env.QUIET_SWEEP_OUT, table.join('\n'))
-    expect(table.filter(l => !l.startsWith('c7 '))).toEqual(PINNED)
-  })
+      const table = [...all].sort().map(([k, n]) => `${k} x${n}`)
+      if (process.env.QUIET_SWEEP_OUT) writeFileSync(process.env.QUIET_SWEEP_OUT, table.join('\n'))
+      expect(routedBoxes).toEqual([])
+      expect(table.filter(l => / (shooter|generator|scroll) x/.test(l))).toEqual(PINNED_ROUTED)
+    },
+  )
 })
 
-const PINNED = [
-  '19 other x1', '1f other x1', '4d other x2', '4e other x4', '54 other x6', '6d other x4',
-  '89 other x3', '8c other x1', '8e other x6', 'a8 other x2',
+const PINNED_ROUTED = [
   'c9 shooter x20',
   'cc generator x1', 'cd generator x3', 'cf generator x2', 'd0 generator x1', 'd1 generator x1',
   'd2 generator x5', 'd3 generator x2', 'd4 generator x4', 'd5 generator x1', 'd6 generator x2',

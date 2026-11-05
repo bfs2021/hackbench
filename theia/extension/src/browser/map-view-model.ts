@@ -104,7 +104,9 @@ export const hoverPlacementKey = (zoom: number, rect: { left: number; top: numbe
   `${zoom}:${Math.round(rect.left)}:${Math.round(rect.top)}`
 
 /** What the hover shows for a sprite (#981): its plain name only, or nothing when the name table has none. */
-export function spriteName(s: Pick<MapSpriteDto, 'name' | 'kind' | 'status'>): string | undefined {
+export function spriteName(
+  s: Pick<MapSpriteDto, 'name' | 'kind' | 'status' | 'reason'>,
+): string | undefined {
   if (s.status === 'quiet') return quietText(s)
   return s.name || undefined
 }

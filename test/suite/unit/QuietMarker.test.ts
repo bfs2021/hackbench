@@ -5,27 +5,47 @@
 import { describe, it, expect } from 'vitest'
 import type { LevelSprite } from '../../../src/rom/LevelParser'
 import { RomFile } from '../../../src/rom/RomFile'
-import { loadClasses } from '../../../src/rom/sprites/interp/LoadClass'
-import { drawSprites, type SpriteDrawResult } from '../../../theia/extension/src/node/map-sprites'
+import { composeScreen } from '../../../src/rom/model/ColorMath'
+import { FALLBACK_SCREENS } from '../../../src/rom/model/ScreenPlanes'
+import { loadClasses, SHAPES, type LoadClass } from '../../../src/rom/sprites/interp/LoadClass'
+import { withSeed } from '../../../src/rom/sprites/interp/SpriteSeed'
+import type { SpriteModel } from '../../../src/rom/sprites/interp/SpriteRunner'
+import {
+  drawSprites,
+  framesOf,
+  interpDrawer,
+  modelResult,
+  type SpriteDrawResult,
+} from '../../../theia/extension/src/node/map-sprites'
 import {
   spriteAt,
   spriteDoors,
   spriteName,
+  spritePlanes,
 } from '../../../theia/extension/src/browser/map-view-model'
-import { quietText, spriteProps } from '../../../theia/extension/src/browser/sprite-props'
+import {
+  framesReasonText,
+  quietText,
+  spriteProps,
+  WHY_NOT_DRAWN,
+} from '../../../theia/extension/src/browser/sprite-props'
 import type { MapSpriteDto } from '../../../theia/extension/src/common/project-protocol'
 import { COLORS } from '../support/mapInputs'
 
 const sprite = (spriteId: number, index = 0, raw0 = 0): LevelSprite =>
   ({ screen: 0, x: 3, y: 4, spriteId, extraBit: false, raw: [raw0, 0, 0], index }) as LevelSprite
 const model = { vram: {} as never, colors: COLORS }
+// A test stand-in for the loader's routing; production reads it from the ROM (LoadClass.ts).
+const routedOf = (id: number): LoadClass =>
+  id >= 0xe7 ? 'scroll' : id === 0xc9 ? 'shooter' : 'normal'
 const draw = (results: Record<number, SpriteDrawResult>) => (s: LevelSprite) => results[s.spriteId]!
 const run = (sprites: LevelSprite[], results: Record<number, SpriteDrawResult>) =>
-  drawSprites(sprites, model, draw(results))
+  drawSprites(sprites, model, draw(results), undefined, routedOf)
 const alpha = (d: MapSpriteDto) => {
   const b = Buffer.from(d.rgba, 'base64')
   return (x: number, y: number) => b[(y * 16 + x) * 4 + 3]!
 }
+const runModel = (o: Partial<SpriteModel>): SpriteModel => ({ id: 1, passes: [], dependsOn: [], steps: [], ...o }) // prettier-ignore
 
 describe('the verdict decides the marker', () => {
   const failed: SpriteDrawResult = { ok: false, reason: 'refused: INIT: step budget spent' }
@@ -54,12 +74,34 @@ describe('the verdict decides the marker', () => {
     expect([q!.status, f!.status]).toEqual(['quiet', 'placeholder'])
   })
 
+  it('an empty run on a generic (unverified) seed keeps the box and its warning', () => {
+    const generic = modelResult(runModel({ seedSource: 'generic', seedReason: 'no stock loader', emptyReason: 'drew no OAM tile' })) // prettier-ignore
+    expect(generic).toMatchObject({ ok: false, empty: true, unverified: expect.stringContaining('no stock loader') }) // prettier-ignore
+    const [d] = run([sprite(1)], { 1: generic })
+    expect(d).toMatchObject({ status: 'placeholder', unverified: expect.stringContaining('no stock loader') }) // prettier-ignore
+    const [verified] = run([sprite(1)], { 1: modelResult(runModel({ emptyReason: 'drew no OAM tile' })) }) // prettier-ignore
+    expect(verified!.status).toBe('quiet')
+  })
+
   it('a routed scroll command is quiet even with the extra bits set; a routed shooter with them is not', () => {
     const [scroll] = run([sprite(0xe8, 0, 0x08)], { 0xe8: routed })
     expect(scroll).toMatchObject({ status: 'quiet', kind: 'scroll' })
     const [shooter] = run([sprite(0xc9, 0, 0x08)], { 0xc9: { ...routed, routed: 'shooter' } })
     expect(shooter).toMatchObject({ status: 'placeholder', reason: 'extraBits' })
     expect(run([sprite(0x10, 0, 0x08)], { 0x10: empty })[0]!.reason).toBe('extraBits')
+  })
+
+  it('the extra-bits gate is before the draw: an extra-bits sprite that is not a scroll command never runs its code', () => {
+    const ran: number[] = []
+    const spy = (s: LevelSprite): SpriteDrawResult => {
+      ran.push(s.spriteId)
+      throw new Error('custom code must not run')
+    }
+    const out = drawSprites([sprite(0x10, 0, 0x08), sprite(0xc9, 1, 0x08)], model, spy, undefined, routedOf) // prettier-ignore
+    expect(out.map(d => d.reason)).toEqual(['extraBits', 'extraBits'])
+    expect(ran).toEqual([])
+    expect(() => drawSprites([sprite(0xe8, 0, 0x08)], model, spy, undefined, routedOf)).toThrow()
+    expect(ran).toEqual([0xe8]) // a scroll command is the one exempt kind
   })
 })
 
@@ -88,10 +130,32 @@ describe('the marker', () => {
   it('is hit anywhere in its box, the clear interior included, and the screen door skips it', () => {
     const g = { orientation: 'horizontal' as const, screenCount: 1, width: 512, height: 432 }
     const sprites = [d!]
-    expect(spriteAt(sprites, g, 55, 71)?.index).toBe(d!.index) // the clear interior
+    // Local (4, 7) is clear in the bitmap (the center dot is (7, 7)): only the whole-box rule hits it.
+    expect(a(4, 7)).toBe(0)
+    expect(spriteAt(sprites, g, 48 + 4, 64 + 7)?.index).toBe(d!.index)
     expect(spriteAt(sprites, g, 47, 71)).toBeUndefined()
     const doors = spriteDoors({ ...g, sprites }, 0)
     expect(doors && doors.every(v => v === 0)).toBe(true)
+  })
+
+  it('draws above a high-priority tile: every lit ring pixel shows over a tile that covers the box', () => {
+    const g = { orientation: 'horizontal' as const, screenCount: 1, width: 256, height: 432 }
+    const planes = spritePlanes({ ...g, sprites: [d!] }, 0)
+    expect(planes.sprites3).not.toBeNull()
+    expect([planes.sprites0, planes.sprites1, planes.sprites2]).toEqual([null, null, null])
+    const tile = new Uint8ClampedArray(g.width * g.height * 4)
+    for (let i = 0; i < tile.length; i += 4) tile.set([200, 0, 0, 255], i)
+    const out = composeScreen({ width: g.width, height: g.height, planes: { l1High: tile, ...planes }, lists: FALLBACK_SCREENS, math: null }) // prettier-ignore
+    let lit = 0
+    for (let y = 0; y < 16; y++)
+      for (let x = 0; x < 16; x++) {
+        const at = ((64 + y) * g.width + 48 + x) * 4
+        if (a(x, y)) {
+          lit++
+          expect(Array.from(out.subarray(at, at + 3))).not.toEqual([200, 0, 0])
+        } else expect(Array.from(out.subarray(at, at + 3))).toEqual([200, 0, 0]) // the tile shows through the clear part
+      }
+    expect(lit).toBeGreaterThan(40)
   })
 })
 
@@ -102,12 +166,27 @@ describe('plain words', () => {
       quietText({ kind: 'scroll', name: 'Whatever' }),
       quietText({ kind: undefined, name: 'Some Sprite' }),
       quietText({ kind: undefined, name: undefined }),
+      quietText({ kind: 'generator', name: 'Eerie Generator' }),
     ]
     expect(words[0]).toBe('Bullet Bill Shooter: fires on a timer; nothing is drawn until it does')
     expect(words[1]).toBe('Scroll command: changes how the screen scrolls; it has no picture in the game') // prettier-ignore
     expect(words[2]).toBe('Some Sprite: runs normally, but draws nothing on the map')
     expect(words[3]).toBe('Runs normally, but draws nothing on the map')
+    expect(words[4]).toBe(
+      'Eerie Generator: stays active once reached; it has no picture on the map',
+    )
     for (const w of words) expect(w).not.toMatch(/OAM|pass|\$|0x|github|water|fog/i)
+  })
+
+  it('a reason the Properties view has words for says why, before the generic line', () => {
+    WHY_NOT_DRAWN.syntheticKey = 'Only a player action reveals it.'
+    try {
+      expect(quietText({ kind: undefined, name: 'Hidden Thing', reason: 'syntheticKey' })).toBe('Hidden Thing: Only a player action reveals it.') // prettier-ignore
+      expect(quietText({ kind: undefined, name: undefined, reason: 'syntheticKey' })).toBe('Only a player action reveals it.') // prettier-ignore
+      expect(quietText({ kind: undefined, name: 'X', reason: 'no such key' })).toMatch(/runs normally/) // prettier-ignore
+    } finally {
+      delete WHY_NOT_DRAWN.syntheticKey
+    }
   })
 
   it('the hover and Properties carry it; a failed sprite keeps the old line', () => {
@@ -116,30 +195,146 @@ describe('plain words', () => {
     expect(spriteProps(q!).notes[0]).toMatch(/^Scroll command: .*game\.$/)
     expect(spriteProps(f!).notes[0]).toMatch(/^Not drawn: /)
   })
+
+  it('a routed id is not described as drawn by its own routine in the animation line', () => {
+    const r = framesOf({ direct: { ok: false, reason: 'x', routed: 'shooter' } }, sprite(0xc9), model) // prettier-ignore
+    expect(r.frames).toEqual([])
+    const words = framesReasonText(r.reason!)
+    expect(words).toBe('It has no picture on the map, so there is nothing to animate.')
+    expect(words).not.toMatch(/routine/)
+  })
 })
 
-// A bank-2 window carrying only the loader's opcode shapes, with operands unlike the game's.
-function cart(over: { scrollSub?: number; skipShooter?: boolean } = {}): RomFile {
+// A bank-2 window carrying only the loader's opcode shapes, with operands unlike the game's. The offsets are
+// the blocks' places; the hops between them are real branch displacements.
+const S = 0x100 // the scroll test (its store/DEY prefix first)
+const E = 0x140 // the Eeries test
+const P = 0x150 // the platforms test
+const G = 0x1a0 // the generator test
+const SH = 0x1b4 // the shooter test, 20 bytes past the generator test
+const rel = (at: number, to: number) => (to - (at + 2)) & 0xff
+function cart(
+  edit: (put: (at: number, bytes: number[]) => void, buf: Buffer) => void = () => undefined,
+): RomFile {
   const buf = Buffer.alloc(0x80000)
   buf[0x7fd5] = 0x20
   const put = (at: number, bytes: number[]) => buf.set(bytes, 0x10000 + at)
-  put(0x100, [0xc9, 0xa0, 0x90, 0x40, 0xad, 0x34, 0x12, 0x0d, 0x56, 0x12, 0xd0, 0x20, 0x5a, 0xda, 0xa5, 0x05, 0x38, 0xe9, over.scrollSub ?? 0xa0, 0x8d, 0x78, 0x12]) // prettier-ignore
-  // generator test: ids 0x50..0x5f; its low branch (+0x10) lands on the shooter test at 0x214
-  put(0x200, [0xc9, 0x50, 0x90, 0x10, 0xc9, 0x60, 0xb0, 0x20, 0x38, 0xe9, 0x50, 0x1a, 0x8d, 0x9a, 0x12]) // prettier-ignore
-  if (!over.skipShooter) put(0x214, [0xc9, 0x4e, 0x90, 0x08, 0x20, 0x00, 0x90, 0x80, 0x02, 0xa9, 0x01]) // prettier-ignore
+  put(S, [0x85, 0x05, 0x88, 0xc9, 0xa0, 0x90, rel(S + 5, E), 0xad, 0x34, 0x12, 0x0d, 0x56, 0x12, 0xd0, 0x20, 0x5a, 0xda, 0xa5, 0x05, 0x38, 0xe9, 0xa0, 0x8d, 0x78, 0x12]) // prettier-ignore
+  put(E, [0xc9, 0xde, 0xd0, rel(E + 2, P), 0x5a, 0xda, 0x88, 0x84, 0x03, 0x20, 0x00, 0x90])
+  put(P, [0xc9, 0xe0, 0xd0, rel(P + 2, G), 0x5a, 0xda, 0x88, 0x84, 0x03, 0x20, 0x00, 0x90])
+  // generators 0x50..0x5f; shooters 0x4b..0x4f: a gap of 5 below the generator bound, unlike the game's.
+  put(G, [0xc9, 0x50, 0x90, rel(G + 2, SH), 0xc9, 0x60, 0xb0, 0x20, 0x38, 0xe9, 0x50, 0x1a, 0x8d, 0x9a, 0x12]) // prettier-ignore
+  put(SH, [0xc9, 0x4b, 0x90, 0x05, 0x20, 0x00, 0x90, 0x80, 0x02, 0xa9, 0x01])
+  edit(put, buf)
   return RomFile.fromBytes('x.sfc', buf)
+}
+const reasonOf = (rom: RomFile) => {
+  const r = loadClasses(rom)
+  return r.status === 'unavailable' ? r.reason : 'ok'
 }
 
 describe('LoadClass reads the loader from its operands', () => {
-  it('classes follow the planted bounds, not the game values', () => {
+  it('classes follow the planted bounds, not the game values or a fixed gap', () => {
     const r = loadClasses(cart())
     if (r.status !== 'ok') throw new Error(r.reason)
-    expect([0x10, 0x4d, 0x4e, 0x4f, 0x50, 0x5f, 0x60, 0x9f, 0xa0, 0xff].map(r.of)).toEqual(['normal', 'normal', 'shooter', 'shooter', 'generator', 'generator', 'normal', 'normal', 'scroll', 'scroll']) // prettier-ignore
+    const ids = [0x10, 0x4a, 0x4b, 0x4f, 0x50, 0x5f, 0x60, 0x9f, 0xa0, 0xff]
+    expect(ids.map(r.of)).toEqual(['normal', 'normal', 'shooter', 'shooter', 'generator', 'generator', 'normal', 'normal', 'scroll', 'scroll']) // prettier-ignore
+    // A shooter bound taken as the generator bound minus 2 would call 0x4e shooter and 0x4b normal.
+    expect([0x4b, 0x4c, 0x4d].map(r.of)).toEqual(['shooter', 'shooter', 'shooter'])
   })
 
-  it('refuses, with a reason, when a test is missing or two bounds disagree', () => {
-    expect(loadClasses(cart({ skipShooter: true }))).toMatchObject({ status: 'unavailable', reason: expect.stringContaining('shooter') }) // prettier-ignore
-    expect(loadClasses(cart({ scrollSub: 0xa1 }))).toMatchObject({ status: 'unavailable', reason: expect.stringContaining('scroll') }) // prettier-ignore
+  it('each gate fails the read when it is removed (one planted byte each)', () => {
+    const gates: [string, (put: (at: number, b: number[]) => void) => void, RegExp][] = [
+      [
+        'scroll subtract differs from compare',
+        put => put(S + 21, [0xa1]),
+        /scroll test and the command number/,
+      ],
+      [
+        'generator subtract differs from compare',
+        put => put(G + 10, [0x51]),
+        /generator test and the number/,
+      ],
+      [
+        'generator low branch elsewhere',
+        put => put(G + 3, [0x20]),
+        /hand lower ids to the shooter/,
+      ],
+      ['shooter low branch elsewhere', put => put(SH + 3, [0x06]), /hand lower ids on/],
+      ['scroll branch elsewhere', put => put(S + 6, [0x10]), /does not lead through/],
+      ['Eeries branch elsewhere', put => put(E + 3, [0x02]), /does not lead through/],
+      ['platforms branch elsewhere', put => put(P + 3, [0x02]), /does not lead through/],
+      ['shooter bound not below generator', put => put(SH + 1, [0x55]), /not in an order/],
+      ['generator end past the scroll bound', put => put(G + 5, [0xb0]), /not in an order/],
+    ]
+    for (const [name, edit, why] of gates) expect(reasonOf(cart(edit)), name).toMatch(why)
+    expect(reasonOf(cart())).toBe('ok')
+  })
+
+  it('every opcode of every shape gates the read: changing any one makes it unavailable', () => {
+    const at: Record<string, number[]> = {
+      scroll: [S],
+      loaderCall: [E, P],
+      generator: [G],
+      shooter: [SH],
+    }
+    let flipped = 0
+    for (const [name, shape] of Object.entries(SHAPES))
+      shape.forEach((w, i) => {
+        if (w === null) return
+        for (const base of at[name]!) {
+          const rom = cart((_put, buf) => (buf[0x10000 + base + i]! ^= 0xff))
+          expect(reasonOf(rom), `${name}[${i}] at ${base.toString(16)}`).not.toBe('ok')
+          flipped++
+        }
+      })
+    expect(flipped).toBeGreaterThan(30)
+  })
+
+  it('a second copy of a shape makes the read ambiguous (first of many is not taken)', () => {
+    const second = (put: (at: number, b: number[]) => void) => put(0x400, [0xc9, 0x77, 0x90, 0x10, 0xc9, 0x78, 0xb0, 0x20, 0x38, 0xe9, 0x77, 0x1a, 0x8d, 0x00, 0x12]) // prettier-ignore
+    expect(reasonOf(cart(second))).toMatch(/generator test was found 2 times/)
+    const shooter2 = (put: (at: number, b: number[]) => void) => put(0x400, [0xc9, 0x77, 0x90, 0x05, 0x20, 0x00, 0x90, 0x80, 0x02, 0xa9, 0x01]) // prettier-ignore
+    expect(reasonOf(cart(shooter2))).toMatch(/shooter test was found 2 times/)
+  })
+
+  it('refuses a cart with no loader at all', () => {
     expect(loadClasses(RomFile.fromBytes('x.sfc', Buffer.alloc(0x80000)))).toMatchObject({ status: 'unavailable' }) // prettier-ignore
+  })
+})
+
+describe('the runner routes by what LoadClass read, with no fallback to the game bands', () => {
+  const seedFor = () => withSeed({ loaded: new Uint8Array(0x2000) })
+  const geometry = { isVertical: false, screenCount: 1 }
+  const drawerFor = (rom: RomFile, ran: number[]) =>
+    interpDrawer(
+      rom,
+      0,
+      geometry,
+      (_r, id) => (ran.push(id), runModel({ refusal: 'spy' })),
+      seedFor,
+    )
+
+  it('routes the planted shooter and scroll bands without running sprite code; the game bands run as sprites', () => {
+    const ran: number[] = []
+    const d = drawerFor(cart(), ran)
+    expect(d(sprite(0x4b))).toMatchObject({ ok: false, routed: 'shooter' })
+    expect(d(sprite(0x55))).toMatchObject({ ok: false, routed: 'generator' })
+    expect(d(sprite(0xa0))).toMatchObject({ ok: false, routed: 'scroll' })
+    expect(ran).toEqual([])
+    // 0x70 is in no planted band, so it runs as a sprite.
+    d(sprite(0x70))
+    expect(ran).toEqual([0x70])
+  })
+
+  it('an unreadable loader routes nothing: the game bands are not assumed', () => {
+    const ran: number[] = []
+    const d = drawerFor(
+      cart(put => put(SH, [0xea, 0xea])),
+      ran,
+    )
+    d(sprite(0xe8))
+    d(sprite(0xc9))
+    expect(ran).toEqual([0xe8, 0xc9])
   })
 })

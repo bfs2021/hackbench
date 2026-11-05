@@ -20,7 +20,7 @@ export const LOADING_FRAMES = 'Checking for animation frames...'
 export const animatedText = (n: number) => `Animated: ${n} frames, looping.`
 
 /** Why a sprite is drawn as a numbered marker, in words; the engine's own reason is kept when it is not one of these. */
-const WHY_NOT_DRAWN: Record<string, string> = {
+export const WHY_NOT_DRAWN: Record<string, string> = {
   extraBits:
     'It uses the extra-bits marker that custom sprites use, so vanilla art would be wrong.',
   noParts: 'Its code drew no tiles.',
@@ -51,6 +51,8 @@ export function framesReasonText(reason: string): string {
   if (reason.startsWith('its parts are fixed')) return 'Its parts are fixed to the screen, so they have no place on the map to animate at.' // prettier-ignore
   if (reason.startsWith('it is drawn by a special routine')) return 'This sprite is drawn by its own routine, not frame by frame, so no animation is shown.' // prettier-ignore
   if (reason.startsWith('drew no')) return WHY_NOT_DRAWN.noParts!
+  if (reason === 'it has no picture')
+    return 'It has no picture on the map, so there is nothing to animate.'
   return 'The frames could not be worked out.'
 }
 
@@ -125,11 +127,16 @@ export function shiftNote(
 }
 
 /** The quiet marker's tooltip and Properties line (#1011): the sprite's name, then why nothing shows. Plain words. */
-export function quietText(s: Pick<MapSpriteDto, 'kind' | 'name'>): string {
+export function quietText(s: Pick<MapSpriteDto, 'kind' | 'name' | 'reason'>): string {
   if (s.kind === 'scroll')
     return 'Scroll command: changes how the screen scrolls; it has no picture in the game'
   if (s.kind === 'shooter' && s.name)
     return `${s.name}: fires on a timer; nothing is drawn until it does`
+  if (s.kind === 'generator')
+    return `${s.name ?? 'Generator'}: stays active once reached; it has no picture on the map`
+  // A reason the Properties view has words for says why (for example a sprite only a player action reveals).
+  const why = s.reason ? WHY_NOT_DRAWN[s.reason] : undefined
+  if (why) return s.name ? `${s.name}: ${why}` : why
   return s.name
     ? `${s.name}: runs normally, but draws nothing on the map`
     : 'Runs normally, but draws nothing on the map'
