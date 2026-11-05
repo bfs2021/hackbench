@@ -13,6 +13,10 @@
  * shapes, reads `unavailable`. The scroll compare and subtract, and the generator compare and subtract, must carry one
  * number each. Any other shape is `status: 'unavailable'`, with the reason, and the caller then treats the id as an
  * ordinary sprite.
+ * Every branch in the chain has its DESTINATION read, not just its opcode: the three hops above, the generator's upper-bound
+ * branch (it must skip the whole generator path), the generator's and shooter's skip-on branches (both to one branch on to the
+ * next sprite), the entry's three skips and the scroll guard. The two call targets (the loader subroutines the Eeries, platform
+ * and shooter tests call) are not checked: they do not decide which class an id has.
  * Not checked: what reaches that first instruction. The loop that calls it has no ROM address that is not itself a
  * constant, so a patch that diverts control before it, to a copy elsewhere, is not seen.
  */
@@ -31,7 +35,8 @@ const ENTRY = [0xd0, null, 0xb7, null, 0x29, 0xf0, 0xc5, null, 0xd0, null, 0xbd,
 const SCROLL = [...ENTRY, 0xc9, null, 0x90, null, 0xad, null, null, 0x0d, null, null, 0xd0, null, 0x5a, 0xda, 0xa5, null, 0x38, 0xe9, null, 0x8d] // prettier-ignore
 /** The Eeries and platforms tests: CMP, BNE past a call that saves X and Y. */
 const LOADER_CALL = [0xc9, null, 0xd0, null, 0x5a, 0xda, 0x88, 0x84, null, 0x20] // prettier-ignore
-const GENERATOR = [0xc9, null, 0x90, null, 0xc9, null, 0xb0, null, 0x38, 0xe9, null, 0x1a, 0x8d] // prettier-ignore
+/** Compare, below-range branch, upper compare, upper-bound branch, the generator number store, free the slot, skip to the next sprite. */
+const GENERATOR = [0xc9, null, 0x90, null, 0xc9, null, 0xb0, null, 0x38, 0xe9, null, 0x1a, 0x8d, null, null, 0x9e, null, null, 0x80, null] // prettier-ignore
 const SHOOTER = [0xc9, null, 0x90, null, 0x20, null, null, 0x80, null, 0xa9] // prettier-ignore
 export const SHAPES = { scroll: SCROLL, loaderCall: LOADER_CALL, generator: GENERATOR, shooter: SHOOTER } // prettier-ignore
 
@@ -95,6 +100,27 @@ function read(rom: RomFile): LoadClasses {
     )
   if (target(code, ge + 2) !== sh)
     return fail('the generator test does not hand lower ids to the shooter test')
+  // The upper-bound branch must skip the whole generator path: land just past its block (the game's next compare).
+  const past = ge + GENERATOR.length
+  if (target(code, ge + 6) !== past)
+    return fail('the generator test upper bound does not skip past the generator path')
+  // The "skip this sprite" hops: the generator's and the shooter's both land on one branch that moves to the next sprite.
+  const next = target(code, ge + 18)
+  if (target(code, sh + 7) !== next || code[next] !== 0x80)
+    return fail('the generator and shooter paths do not both go on to the next sprite')
+  // The entry's skips: the first returns, the other two land on one place outside this routine.
+  const [skip, end] = [target(code, s as number), (s as number) + SCROLL.length]
+  const out = target(code, (s as number) + 8)
+  if (
+    code[skip] !== 0x60 ||
+    out !== target(code, (s as number) + 13) ||
+    (out >= (s as number) && out < end)
+  )
+    return fail('the sprite load start does not skip the way the loader does')
+  // The scroll store's guard skips past the store, onto the branch to the next sprite.
+  const guard = target(code, sc + 10)
+  if (code[guard] !== 0x80 || guard < sc + SCROLL.length - ENTRY.length)
+    return fail('the scroll command guard does not skip past its store')
   if (target(code, sh + 2) !== sh + 9)
     return fail('the shooter test does not hand lower ids on to the sprite slots')
   const shootFrom = code[sh + 1]!

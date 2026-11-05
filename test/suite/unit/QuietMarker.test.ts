@@ -250,16 +250,21 @@ describe('plain words', () => {
 
 // A bank-2 window carrying only the loader's opcode shapes, with operands unlike the game's. The offsets are
 // the blocks' places; the hops between them are real branch displacements.
+/** The branch displacement byte from `at` to `to`. */
+const rel = (at: number, to: number) => (to - (at + 2)) & 0xff
 // The routine's start (checked, so a hook patched over it reads unavailable), then the scroll test.
-const ENTRY = [0xd0, 0x10, 0xb7, 0x0a, 0x29, 0xf0, 0xc5, 0x00, 0xd0, 0x05, 0xbd, 0x00, 0x12, 0xd0, 0x03, 0x86, 0x02, 0xfe, 0x00, 0x12, 0xc8, 0xb7, 0x0a, 0x85, 0x05, 0x88] // prettier-ignore
 const S = 0x100
+const RET = 0x132 // where the entry's first skip lands: a return
+const LN = 0x138 // where the entry's other two skips land, outside the routine
+const GUARD = 0x130 // where the scroll guard lands: the branch on to the next sprite
+const ENTRY = [0xd0, rel(S, RET), 0xb7, 0x0a, 0x29, 0xf0, 0xc5, 0x00, 0xd0, rel(S + 8, LN), 0xbd, 0x00, 0x12, 0xd0, rel(S + 13, LN), 0x86, 0x02, 0xfe, 0x00, 0x12, 0xc8, 0xb7, 0x0a, 0x85, 0x05, 0x88] // prettier-ignore
 const SC = S + ENTRY.length // the scroll CMP itself
 const E = 0x140 // the Eeries test
 const P = 0x150 // the platforms test
 const G = 0x1a0 // the generator test
 const SH = 0x1b4 // the shooter test, 20 bytes past the generator test
-/** The branch displacement byte from `at` to `to`. */
-const rel = (at: number, to: number) => (to - (at + 2)) & 0xff
+const AFTER = G + 20 // where the generator's upper-bound branch lands: just past its block, on the next compare (here the shooter test)
+const NEXT = 0x1d0 // where both generator and shooter paths go on: the branch to the next sprite
 // The Eeries/platforms test shape with operands (compare value, saved-index cell, call target) unlike the game's,
 // so no 8-byte run of the fixture is a run of the vanilla ROM (D126); the reader takes only the opcodes and the hops.
 const call = (at: number, cmp: number, cell: number, to: number[], hop: number) => [
@@ -282,12 +287,16 @@ function cart(
   const buf = Buffer.alloc(0x80000)
   buf[0x7fd5] = 0x20
   const put = (at: number, bytes: number[]) => buf.set(bytes, 0x10000 + at)
-  put(S, [...ENTRY, 0xc9, 0xa0, 0x90, rel(SC + 2, E), 0xad, 0x34, 0x12, 0x0d, 0x56, 0x12, 0xd0, 0x20, 0x5a, 0xda, 0xa5, 0x05, 0x38, 0xe9, 0xa0, 0x8d, 0x78, 0x12]) // prettier-ignore
+  put(S, [...ENTRY, 0xc9, 0xa0, 0x90, rel(SC + 2, E), 0xad, 0x34, 0x12, 0x0d, 0x56, 0x12, 0xd0, rel(SC + 10, GUARD), 0x5a, 0xda, 0xa5, 0x05, 0x38, 0xe9, 0xa0, 0x8d, 0x78, 0x12]) // prettier-ignore
+  put(GUARD, [0x80, 0x00])
+  put(RET, [0x60])
+  put(LN, [0xe8])
   put(E, call(E, 0xd3, 0x07, [0x34, 0x92], P))
   put(P, call(P, 0xd7, 0x09, [0x56, 0x93], G))
   // generators 0x50..0x5f; shooters 0x4b..0x4f: a gap of 5 below the generator bound, unlike the game's.
-  put(G, [0xc9, 0x50, 0x90, rel(G + 2, SH), 0xc9, 0x60, 0xb0, 0x20, 0x38, 0xe9, 0x50, 0x1a, 0x8d, 0x9a, 0x12]) // prettier-ignore
-  put(SH, [0xc9, 0x4b, 0x90, 0x05, 0x20, 0x00, 0x90, 0x80, 0x02, 0xa9, 0x01])
+  put(G, [0xc9, 0x50, 0x90, rel(G + 2, SH), 0xc9, 0x60, 0xb0, rel(G + 6, AFTER), 0x38, 0xe9, 0x50, 0x1a, 0x8d, 0x9a, 0x12, 0x9e, 0x11, 0x12, 0x80, rel(G + 18, NEXT)]) // prettier-ignore
+  put(SH, [0xc9, 0x4b, 0x90, 0x05, 0x20, 0x00, 0x90, 0x80, rel(SH + 7, NEXT), 0xa9, 0x01])
+  put(NEXT, [0x80, 0x00])
   edit(put, buf)
   return RomFile.fromBytes('x.sfc', buf)
 }
@@ -324,6 +333,40 @@ describe('LoadClass reads the loader from its operands', () => {
         put => put(G + 3, [0x20]),
         /hand lower ids to the shooter/,
       ],
+      [
+        'generator upper-bound branch into the generator path',
+        put => put(G + 7, [0x00]),
+        /upper bound does not skip/,
+      ],
+      [
+        'generator upper-bound branch elsewhere',
+        put => put(G + 7, [0x30]),
+        /upper bound does not skip/,
+      ],
+      ['generator skip-on hop elsewhere', put => put(G + 19, [0x00]), /go on to the next sprite/],
+      ['shooter skip-on hop elsewhere', put => put(SH + 8, [0x00]), /go on to the next sprite/],
+      [
+        'the next-sprite branch is not a branch',
+        put => put(NEXT, [0xea]),
+        /go on to the next sprite/,
+      ],
+      ['entry first skip is not a return', put => put(RET, [0xea]), /load start does not skip/],
+      [
+        'entry skips land in different places',
+        put => put(S + 14, [rel(S + 13, LN + 2)]),
+        /load start does not skip/,
+      ],
+      [
+        'entry skips both land inside the routine',
+        put => (put(S + 9, [rel(S + 8, S + 0x20)]), put(S + 14, [rel(S + 13, S + 0x20)])),
+        /load start does not skip/,
+      ],
+      ['scroll guard lands off a branch', put => put(GUARD, [0xea]), /guard does not skip/],
+      [
+        'scroll guard lands on a branch before its store',
+        put => (put(S + 3, [0x80]), put(SC + 11, [rel(SC + 10, S + 3)])),
+        /guard does not skip/,
+      ],
       ['shooter low branch elsewhere', put => put(SH + 3, [0x06]), /hand lower ids on/],
       ['scroll branch elsewhere', put => put(SC + 3, [0x10]), /does not lead through/],
       ['Eeries branch elsewhere', put => put(E + 3, [0x02]), /does not lead through/],
@@ -341,7 +384,7 @@ describe('LoadClass reads the loader from its operands', () => {
     const expected: Record<string, { at: number[]; idx: number[] }> = {
       scroll: { at: [S], idx: scroll },
       loaderCall: { at: [E, P], idx: [0, 2, 4, 5, 6, 7, 9] },
-      generator: { at: [G], idx: [0, 2, 4, 6, 8, 9, 11, 12] },
+      generator: { at: [G], idx: [0, 2, 4, 6, 8, 9, 11, 12, 15, 18] },
       shooter: { at: [SH], idx: [0, 2, 4, 7, 9] },
     }
     let n = 0
@@ -355,7 +398,7 @@ describe('LoadClass reads the loader from its operands', () => {
             )
             n++
           }
-    expect(n).toBe(2 * (25 + 2 * 7 + 8 + 5))
+    expect(n).toBe(2 * (25 + 2 * 7 + 10 + 5))
     // The positions are exactly the non-operand bytes of the shapes.
     for (const [name, shape] of Object.entries(SHAPES))
       expect(
@@ -389,7 +432,7 @@ describe('LoadClass reads the loader from its operands', () => {
     ) // a JML over the entry
   })
   it('a second copy of a shape makes the read ambiguous (first of many is not taken)', () => {
-    const second = (put: (at: number, b: number[]) => void) => put(0x400, [0xc9, 0x77, 0x90, 0x10, 0xc9, 0x78, 0xb0, 0x20, 0x38, 0xe9, 0x77, 0x1a, 0x8d, 0x00, 0x12]) // prettier-ignore
+    const second = (put: (at: number, b: number[]) => void) => put(0x400, [0xc9, 0x77, 0x90, 0x10, 0xc9, 0x78, 0xb0, 0x20, 0x38, 0xe9, 0x77, 0x1a, 0x8d, 0x00, 0x12, 0x9e, 0x01, 0x12, 0x80, 0x04]) // prettier-ignore
     expect(reasonOf(cart(second))).toMatch(/generator test was found 2 times/)
     const shooter2 = (put: (at: number, b: number[]) => void) => put(0x400, [0xc9, 0x77, 0x90, 0x05, 0x20, 0x00, 0x90, 0x80, 0x02, 0xa9, 0x01]) // prettier-ignore
     expect(reasonOf(cart(shooter2))).toMatch(/shooter test was found 2 times/)
