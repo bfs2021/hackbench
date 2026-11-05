@@ -8,12 +8,13 @@
  * exactly once, and the tests must be LINKED the way the game chains them: the scroll test's below-range branch lands
  * on the Eeries test, whose not-equal branch lands on the platforms test, whose not-equal branch lands on the generator
  * test, whose below-range branch lands on the shooter test, whose below-range branch lands past its own call. The
- * scroll test must also follow the instruction pair that stores the sprite number (a dead or unlinked copy of the
- * shapes reads `unavailable`). The scroll compare and subtract, and the generator compare and subtract, must carry
- * one number each. Any other shape is `status: 'unavailable'`, with the reason, and the caller then treats the id
- * as an ordinary sprite.
- * Not checked: that the routine's entry is still reached. That needs the caller of the level load, which has no
- * address in the ROM that is not itself a constant, so a patch that diverts control to a copy elsewhere is not seen.
+ * scroll test must also sit behind the routine's first instructions (skip unless the entry is at the screen boundary and not
+ * yet loaded, mark it loaded, store its number), so a hook patched over that start, or a dead or unlinked copy of the
+ * shapes, reads `unavailable`. The scroll compare and subtract, and the generator compare and subtract, must carry one
+ * number each. Any other shape is `status: 'unavailable'`, with the reason, and the caller then treats the id as an
+ * ordinary sprite.
+ * Not checked: what reaches that first instruction. The loop that calls it has no ROM address that is not itself a
+ * constant, so a patch that diverts control before it, to a copy elsewhere, is not seen.
  */
 import type { RomFile } from '../../RomFile'
 
@@ -24,8 +25,10 @@ export type LoadClasses =
 
 const BANK2 = 0x028000
 // null matches any byte (an operand or a branch displacement); the rest are opcodes.
-/** The sprite number was just stored and the index backed up; then CMP, BCC, the scroll-command store. */
-const SCROLL = [0x85, null, 0x88, 0xc9, null, 0x90, null, 0xad, null, null, 0x0d, null, null, 0xd0, null, 0x5a, 0xda, 0xa5, null, 0x38, 0xe9, null, 0x8d] // prettier-ignore
+/** The entry's fall-through into the scroll test: skip unless at the screen boundary and not loaded yet, mark loaded, store the number. */
+const ENTRY = [0xd0, null, 0xb7, null, 0x29, 0xf0, 0xc5, null, 0xd0, null, 0xbd, null, null, 0xd0, null, 0x86, null, 0xfe, null, null, 0xc8, 0xb7, null, 0x85, null, 0x88] // prettier-ignore
+/** Then CMP, BCC, the scroll-command store. */
+const SCROLL = [...ENTRY, 0xc9, null, 0x90, null, 0xad, null, null, 0x0d, null, null, 0xd0, null, 0x5a, 0xda, 0xa5, null, 0x38, 0xe9, null, 0x8d] // prettier-ignore
 /** The Eeries and platforms tests: CMP, BNE past a call that saves X and Y. */
 const LOADER_CALL = [0xc9, null, 0xd0, null, 0x5a, 0xda, 0x88, 0x84, null, 0x20] // prettier-ignore
 const GENERATOR = [0xc9, null, 0x90, null, 0xc9, null, 0xb0, null, 0x38, 0xe9, null, 0x1a, 0x8d] // prettier-ignore
@@ -65,7 +68,7 @@ function read(rom: RomFile): LoadClasses {
   }
   const [s, g, h] = [once('scroll', SCROLL), once('generator', GENERATOR), once('shooter', SHOOTER)]
   for (const x of [s, g, h]) if (typeof x === 'string') return fail(x)
-  const [sc, ge, sh] = [(s as number) + 3, g as number, h as number] // sc: the scroll CMP itself
+  const [sc, ge, sh] = [(s as number) + ENTRY.length, g as number, h as number] // sc: the scroll CMP itself
   const scrollFrom = code[sc + 1]!
   if (code[sc + 18] !== scrollFrom)
     return fail('the scroll test and the command number it subtracts differ')

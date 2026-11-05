@@ -37,15 +37,16 @@ describe.skipIf(!hasRom(VANILLA))('quiet marker on the vanilla ROM', () => {
     },
   )
 
-  it('the $A8 markers on $10A (#12, #14) draw at priority 3, above any tile', slow(60_000), () => {
-    const a8 = get(0x10a).filter(s => s.id === 0xa8 && [12, 14].includes(s.index))
-    expect(a8.map(s => s.index)).toEqual([12, 14])
-    for (const s of a8) {
-      expect(s.status).toBe('quiet')
-      expect(Array.from(Buffer.from(s.priority!, 'base64')).every(p => p === 3)).toBe(true)
-    }
-  })
-
+  it(
+    'every quiet marker on $10A and $126 draws at priority 3, above any tile (no ids named: #1132 draws some)',
+    slow(60_000),
+    () => {
+      const quiet = [...get(0x10a), ...get(0x126)].filter(s => s.status === 'quiet')
+      expect(quiet.length).toBeGreaterThan(0)
+      for (const s of quiet)
+        expect(Array.from(Buffer.from(s.priority!, 'base64')).every(p => p === 3)).toBe(true)
+    },
+  )
   it(
     'every scroll command $E7-$FF placed on a vanilla map is the quiet marker, named as a scroll command',
     slow(120_000),

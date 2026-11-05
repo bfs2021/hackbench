@@ -12,9 +12,11 @@ import { withSeed } from '../../../src/rom/sprites/interp/SpriteSeed'
 import type { SpriteModel } from '../../../src/rom/sprites/interp/SpriteRunner'
 import {
   drawSprites,
+  framesGate,
   framesOf,
   interpDrawer,
   modelResult,
+  spriteLayer,
   type SpriteDrawResult,
 } from '../../../theia/extension/src/node/map-sprites'
 import {
@@ -83,6 +85,41 @@ describe('the verdict decides the marker', () => {
     expect(verified!.status).toBe('quiet')
   })
 
+  it('a run with no chosen pass is empty only when the run says so (develop line and anchor line)', () => {
+    expect(modelResult(runModel({ emptyReason: 'drew no OAM tile' }))).toMatchObject({
+      ok: false,
+      empty: true,
+    })
+    const unsaid = modelResult(runModel({}))
+    expect(unsaid).toEqual({ ok: false, reason: 'drew no tile' })
+    expect(run([sprite(1)], { 1: unsaid })[0]!.status).toBe('placeholder')
+    const pass = { pass: 0, pos: { x: 0, y: 0 }, origin: { x: 0, y: 0 }, parts: [], uploads: [], palette: [] } // prettier-ignore
+    expect(modelResult(runModel({ passes: [pass], chosen: 0, emptyReason: 'x' }))).toMatchObject({ ok: false, empty: true }) // prettier-ignore
+    expect(modelResult(runModel({ passes: [pass], chosen: 0 }))).toEqual({
+      ok: false,
+      reason: 'drew no tile',
+    })
+  })
+
+  it('spriteLayer passes the loader routing on: a scroll command with extra bits is quiet only with it', () => {
+    const stream = Uint8Array.from([0, 0x08, 0x01, 0xe8, 0xff]) // one entry, id $E8, extra bit 3 set
+    const m = { ...model, isVertical: false, screenCount: 1 }
+    const d = draw({ 0xe8: { ok: false, reason: 'r', routed: 'scroll' } })
+    expect(spriteLayer(stream, m, d).sprites[0]).toMatchObject({
+      status: 'placeholder',
+      reason: 'extraBits',
+    })
+    expect(spriteLayer(stream, m, d, undefined, routedOf).sprites[0]).toMatchObject({ status: 'quiet', kind: 'scroll' }) // prettier-ignore
+  })
+
+  it('a scroll command with extra bits is told "no picture", not the custom-sprite line, in the animation text', () => {
+    const s = sprite(0xe8, 0, 0x08)
+    expect(framesGate(s, routedOf)).toBe('it has no picture')
+    expect(framesGate(sprite(0x10, 0, 0x08), routedOf)).toBe('extraBits')
+    expect(framesGate(sprite(0xc9, 0, 0x08), routedOf)).toBe('extraBits') // a boxed shooter keeps the box's words
+    expect(framesGate(sprite(0x10), routedOf)).toBeUndefined()
+    expect(framesReasonText(framesGate(s, routedOf)!)).not.toMatch(/extra-bits/)
+  })
   it('a routed scroll command is quiet even with the extra bits set; a routed shooter with them is not', () => {
     const [scroll] = run([sprite(0xe8, 0, 0x08)], { 0xe8: routed })
     expect(scroll).toMatchObject({ status: 'quiet', kind: 'scroll' })
@@ -172,9 +209,7 @@ describe('plain words', () => {
     expect(words[1]).toBe('Scroll command: changes how the screen scrolls; it has no picture in the game') // prettier-ignore
     expect(words[2]).toBe('Some Sprite: runs normally, but draws nothing on the map')
     expect(words[3]).toBe('Runs normally, but draws nothing on the map')
-    expect(words[4]).toBe(
-      'Eerie Generator: stays active once reached; it has no picture on the map',
-    )
+    expect(words[4]).toBe('Eerie Generator: runs in the background; it has no picture on the map')
     for (const w of words) expect(w).not.toMatch(/OAM|pass|\$|0x|github|water|fog/i)
   })
 
@@ -207,7 +242,10 @@ describe('plain words', () => {
 
 // A bank-2 window carrying only the loader's opcode shapes, with operands unlike the game's. The offsets are
 // the blocks' places; the hops between them are real branch displacements.
-const S = 0x100 // the scroll test (its store/DEY prefix first)
+// The routine's start (checked, so a hook patched over it reads unavailable), then the scroll test.
+const ENTRY = [0xd0, 0x10, 0xb7, 0x0a, 0x29, 0xf0, 0xc5, 0x00, 0xd0, 0x05, 0xbd, 0x00, 0x12, 0xd0, 0x03, 0x86, 0x02, 0xfe, 0x00, 0x12, 0xc8, 0xb7, 0x0a, 0x85, 0x05, 0x88] // prettier-ignore
+const S = 0x100
+const SC = S + ENTRY.length // the scroll CMP itself
 const E = 0x140 // the Eeries test
 const P = 0x150 // the platforms test
 const G = 0x1a0 // the generator test
@@ -219,7 +257,7 @@ function cart(
   const buf = Buffer.alloc(0x80000)
   buf[0x7fd5] = 0x20
   const put = (at: number, bytes: number[]) => buf.set(bytes, 0x10000 + at)
-  put(S, [0x85, 0x05, 0x88, 0xc9, 0xa0, 0x90, rel(S + 5, E), 0xad, 0x34, 0x12, 0x0d, 0x56, 0x12, 0xd0, 0x20, 0x5a, 0xda, 0xa5, 0x05, 0x38, 0xe9, 0xa0, 0x8d, 0x78, 0x12]) // prettier-ignore
+  put(S, [...ENTRY, 0xc9, 0xa0, 0x90, rel(SC + 2, E), 0xad, 0x34, 0x12, 0x0d, 0x56, 0x12, 0xd0, 0x20, 0x5a, 0xda, 0xa5, 0x05, 0x38, 0xe9, 0xa0, 0x8d, 0x78, 0x12]) // prettier-ignore
   put(E, [0xc9, 0xde, 0xd0, rel(E + 2, P), 0x5a, 0xda, 0x88, 0x84, 0x03, 0x20, 0x00, 0x90])
   put(P, [0xc9, 0xe0, 0xd0, rel(P + 2, G), 0x5a, 0xda, 0x88, 0x84, 0x03, 0x20, 0x00, 0x90])
   // generators 0x50..0x5f; shooters 0x4b..0x4f: a gap of 5 below the generator bound, unlike the game's.
@@ -247,7 +285,7 @@ describe('LoadClass reads the loader from its operands', () => {
     const gates: [string, (put: (at: number, b: number[]) => void) => void, RegExp][] = [
       [
         'scroll subtract differs from compare',
-        put => put(S + 21, [0xa1]),
+        put => put(SC + 18, [0xa1]),
         /scroll test and the command number/,
       ],
       [
@@ -261,7 +299,7 @@ describe('LoadClass reads the loader from its operands', () => {
         /hand lower ids to the shooter/,
       ],
       ['shooter low branch elsewhere', put => put(SH + 3, [0x06]), /hand lower ids on/],
-      ['scroll branch elsewhere', put => put(S + 6, [0x10]), /does not lead through/],
+      ['scroll branch elsewhere', put => put(SC + 3, [0x10]), /does not lead through/],
       ['Eeries branch elsewhere', put => put(E + 3, [0x02]), /does not lead through/],
       ['platforms branch elsewhere', put => put(P + 3, [0x02]), /does not lead through/],
       ['shooter bound not below generator', put => put(SH + 1, [0x55]), /not in an order/],
@@ -271,26 +309,59 @@ describe('LoadClass reads the loader from its operands', () => {
     expect(reasonOf(cart())).toBe('ok')
   })
 
-  it('every opcode of every shape gates the read: changing any one makes it unavailable', () => {
-    const at: Record<string, number[]> = {
-      scroll: [S],
-      loaderCall: [E, P],
-      generator: [G],
-      shooter: [SH],
+  it('every opcode of every shape gates the read: a flip or a near-miss opcode makes it unavailable', () => {
+    // Positions are written out here, not walked from SHAPES: nulling an opcode in the code under test must fail this.
+    const scroll = [0, 2, 4, 5, 6, 8, 10, 13, 15, 17, 20, 21, 23, 25, 26, 28, 30, 33, 36, 38, 39, 40, 42, 43, 45] // prettier-ignore
+    const expected: Record<string, { at: number[]; idx: number[] }> = {
+      scroll: { at: [S], idx: scroll },
+      loaderCall: { at: [E, P], idx: [0, 2, 4, 5, 6, 7, 9] },
+      generator: { at: [G], idx: [0, 2, 4, 6, 8, 9, 11, 12] },
+      shooter: { at: [SH], idx: [0, 2, 4, 7, 9] },
     }
-    let flipped = 0
+    let n = 0
+    for (const [name, { at, idx }] of Object.entries(expected))
+      for (const base of at)
+        for (const i of idx)
+          for (const change of [0xff, 0x04]) {
+            const rom = cart((_put, buf) => (buf[0x10000 + base + i]! ^= change))
+            expect(reasonOf(rom), `${name}[${i}] at ${base.toString(16)} ^ ${change}`).not.toBe(
+              'ok',
+            )
+            n++
+          }
+    expect(n).toBe(2 * (25 + 2 * 7 + 8 + 5))
+    // The positions are exactly the non-operand bytes of the shapes.
     for (const [name, shape] of Object.entries(SHAPES))
-      shape.forEach((w, i) => {
-        if (w === null) return
-        for (const base of at[name]!) {
-          const rom = cart((_put, buf) => (buf[0x10000 + base + i]! ^= 0xff))
-          expect(reasonOf(rom), `${name}[${i}] at ${base.toString(16)}`).not.toBe('ok')
-          flipped++
-        }
-      })
-    expect(flipped).toBeGreaterThan(30)
+      expect(
+        shape.flatMap((w, i) => (w === null ? [] : [i])),
+        name,
+      ).toEqual(expected[name]!.idx)
   })
 
+  it('the order gate is exact: generator end above its start and not past the scroll bound', () => {
+    expect(reasonOf(cart(put => put(G + 5, [0x50])))).toMatch(/not in an order/) // end == start
+    expect(reasonOf(cart(put => put(G + 5, [0x40])))).toMatch(/not in an order/) // end < start
+    expect(reasonOf(cart(put => put(G + 5, [0xa0])))).toBe('ok') // end == scroll bound is legal: the bands touch
+    expect(reasonOf(cart(put => put(G + 5, [0xa1])))).toMatch(/not in an order/)
+    expect(reasonOf(cart(put => put(SH + 1, [0x50])))).toMatch(/not in an order/) // shooter start == generator start
+  })
+
+  it('a backward branch in the chain is followed as a signed displacement', () => {
+    // The Eeries test moves ahead of the scroll test: the scroll test's branch goes backward.
+    const E2 = 0xe0
+    const moved = (put: (at: number, b: number[]) => void) => {
+      put(E2, [0xc9, 0xde, 0xd0, rel(E2 + 2, P), 0x5a, 0xda, 0x88, 0x84, 0x03, 0x20, 0x00, 0x90])
+      put(SC + 3, [rel(SC + 2, E2)])
+    }
+    expect(reasonOf(cart(moved))).toBe('ok')
+    expect(reasonOf(cart((put, buf) => (moved(put), put(SC + 3, [buf[0x10000 + SC + 3]! ^ 0x01]))))).toMatch(/does not lead through/) // prettier-ignore
+  })
+
+  it('a hook patched over the routine start reads unavailable', () => {
+    expect(reasonOf(cart(put => put(S, [0x5c, 0x00, 0x90, 0x02])))).toMatch(
+      /scroll test was found 0/,
+    ) // a JML over the entry
+  })
   it('a second copy of a shape makes the read ambiguous (first of many is not taken)', () => {
     const second = (put: (at: number, b: number[]) => void) => put(0x400, [0xc9, 0x77, 0x90, 0x10, 0xc9, 0x78, 0xb0, 0x20, 0x38, 0xe9, 0x77, 0x1a, 0x8d, 0x00, 0x12]) // prettier-ignore
     expect(reasonOf(cart(second))).toMatch(/generator test was found 2 times/)

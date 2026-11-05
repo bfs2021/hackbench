@@ -9,7 +9,7 @@ D99 chose a quiet marker for placed items the game draws nothing for, and Unifor
 ## Options considered
 
 1. The mockup's opaque circle: reads well, but covers the tile under it (the issue says 12 $C9 shooters on map $126 sit on one Map16 tile; the map data has 16, all on tile $141, read 2026-11-05).
-2. A thin neutral ring and small center dot, every other pixel fully transparent, with a one-pixel dark edge so it reads on light and dark art. Hover, click and drag still work over the whole 16 x 16 box, and it draws above every tile (priority 3). [PROP]
+2. A thin neutral ring and small center dot, every other pixel fully transparent, with a one-pixel dark edge so it reads on light and dark art. Hover, click and drag still work over the whole 16 x 16 box, and it draws above the Layer 1 and Layer 2 tiles (priority 3). [PROP]
 
 ## Ruling
 

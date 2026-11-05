@@ -133,7 +133,7 @@ export function quietText(s: Pick<MapSpriteDto, 'kind' | 'name' | 'reason'>): st
   if (s.kind === 'shooter' && s.name)
     return `${s.name}: fires on a timer; nothing is drawn until it does`
   if (s.kind === 'generator')
-    return `${s.name ?? 'Generator'}: stays active once reached; it has no picture on the map`
+    return `${s.name ?? 'Generator'}: runs in the background; it has no picture on the map`
   // A reason the Properties view has words for says why (for example a sprite only a player action reveals).
   const why = s.reason ? WHY_NOT_DRAWN[s.reason] : undefined
   if (why) return s.name ? `${s.name}: ${why}` : why
