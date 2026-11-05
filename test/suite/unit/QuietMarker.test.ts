@@ -254,18 +254,20 @@ describe('plain words', () => {
 const rel = (at: number, to: number) => (to - (at + 2)) & 0xff
 // The routine's start (checked, so a hook patched over it reads unavailable), then the scroll test.
 const S = 0x100
-const RET = 0x132 // where the entry's first skip lands: a return
-const LN = 0x138 // where the entry's other two skips land, outside the routine
+const C = 0xc0 // the loop that calls the routine (unlike operands); its branch must land on S
+const LN = C + 24 // where the entry's other two skips land: the loop's step to the next sprite
+const RET = 0xa0 // where the entry first skip and the loop end branch land: a return
 const GUARD = 0x130 // where the scroll guard lands: the branch on to the next sprite
 const ENTRY = [0xd0, rel(S, RET), 0xb7, 0x0a, 0x29, 0xf0, 0xc5, 0x00, 0xd0, rel(S + 8, LN), 0xbd, 0x00, 0x12, 0xd0, rel(S + 13, LN), 0x86, 0x02, 0xfe, 0x00, 0x12, 0xc8, 0xb7, 0x0a, 0x85, 0x05, 0x88] // prettier-ignore
 const SC = S + ENTRY.length // the scroll CMP itself
 const E = 0x140 // the Eeries test
 const P = 0x150 // the platforms test
-const G = 0x1a0 // the generator test
-const SH = 0x1b4 // the shooter test, 20 bytes past the generator test
-const AFTER = G + 20 // where the generator's upper-bound branch lands: just past its block, on the next compare (here the shooter test)
+const G = 0x160 // the generator test
+const AFTER = G + 20 // where the generator's upper-bound branch lands: the test for the cluster spawners, just past its block
+const ST9 = AFTER + 16 // the carried-shell path the cluster test's below-range branch lands on
+const SH = AFTER + 20 // the shooter test: right after those two blocks
 const LS = 0x1000 // the shooter loader's opening, which the shooter test's call (operand $9000) must reach
-const NEXT = 0x164 // where both generator and shooter paths go on: the branch to the next sprite
+const NEXT = 0x138 // where both generator and shooter paths go on: the branch to the next sprite
 // The Eeries/platforms test shape with operands (compare value, saved-index cell, call target) unlike the game's,
 // so no 8-byte run of the fixture is a run of the vanilla ROM (D126); the reader takes only the opcodes and the hops.
 const call = (at: number, cmp: number, cell: number, to: number[], hop: number) => [
@@ -291,7 +293,9 @@ function cart(
   put(S, [...ENTRY, 0xc9, 0xa0, 0x90, rel(SC + 2, E), 0xad, 0x34, 0x12, 0x0d, 0x56, 0x12, 0xd0, rel(SC + 10, GUARD), 0x5a, 0xda, 0xa5, 0x05, 0x38, 0xe9, 0xa0, 0x8d, 0x78, 0x12]) // prettier-ignore
   put(GUARD, [0x80, rel(GUARD, LN)])
   put(RET, [0x60])
-  put(LN, [0xe8])
+  put(C, [0xb7, 0x0a, 0xc9, 0xff, 0xf0, rel(C + 4, RET), 0x0a, 0x0a, 0x0a, 0x29, 0x10, 0x85, 0x0b, 0xc8, 0xb7, 0x0c, 0x29, 0x0f, 0x05, 0x0d, 0xc5, 0x0e, 0xb0, rel(C + 22, S), 0xc8, 0xc8, 0xe8, 0x80, rel(C + 27, C)]) // prettier-ignore
+  put(AFTER, [0xc9, 0x85, 0x90, rel(AFTER + 2, ST9), 0xda, 0x5a, 0x88, 0x84, 0x0c, 0x20, 0x78, 0x94, 0x7a, 0xfa, 0x80, rel(AFTER + 14, NEXT)]) // prettier-ignore
+  put(ST9, [0xa9, 0x05, 0x80, rel(ST9 + 2, SH + 11)])
   put(E, call(E, 0x73, 0x07, [0x34, 0x92], P))
   put(P, call(P, 0x77, 0x09, [0x56, 0x93], G))
   // generators 0x50..0x5f; shooters 0x4b..0x4f: a gap of 5 below the generator bound, unlike the game's.
@@ -340,6 +344,35 @@ const GATES: [string, (put: (at: number, b: number[]) => void) => void, RegExp][
     put => put(E + 1, [0xa0]),
     /Eeries or platform test/,
   ],
+  ['caller branch redirected away from the routine', put => put(C + 23, [0x00]), /caller loop/],
+  ['caller loop missing', put => put(C, [0xea]), /caller loop/],
+  ['caller loop end-of-list branch elsewhere', put => put(C + 5, [0x00]), /caller loop/],
+  ['caller loop does not repeat', put => put(C + 28, [0x00]), /caller loop/],
+  [
+    'entry skips land somewhere other than the caller loop step',
+    put => (put(S + 9, [rel(S + 8, GUARD)]), put(S + 14, [rel(S + 13, GUARD)])),
+    /load start does not skip/,
+  ],
+  [
+    'generator upper bound lands on a missing cluster test',
+    put => put(AFTER, [0xea]),
+    /upper-bound path/,
+  ],
+  ['cluster test below-range branch elsewhere', put => put(AFTER + 3, [0x00]), /upper-bound path/],
+  ['cluster test tail goes elsewhere', put => put(AFTER + 15, [0x00]), /upper-bound path/],
+  ['carried-shell path goes elsewhere', put => put(ST9 + 3, [0x00]), /upper-bound path/],
+  [
+    'shooter test relocated, everything else relinked',
+    put => {
+      const SH2 = SH + 8
+      put(SH, new Array(11).fill(0))
+      put(SH2, [0xc9, 0x4b, 0x90, 0x05, 0x20, 0x00, 0x90, 0x80, rel(SH2 + 7, NEXT), 0xa9, 0x01])
+      put(G + 3, [rel(G + 2, SH2)])
+      put(ST9 + 3, [rel(ST9 + 2, SH2 + 11)])
+    },
+    /upper-bound path/,
+  ],
+  ['carried-shell path missing', put => put(ST9, [0xea]), /upper-bound path/],
   [
     'shooter call repointed to another routine',
     put => put(SH + 5, [0x00, 0x91]),
@@ -421,6 +454,12 @@ const OPCODES: Record<string, { at: number[]; idx: number[] }> = {
   generator: { at: [G], idx: [0, 2, 4, 6, 8, 9, 11, 12, 15, 18] },
   shooter: { at: [SH], idx: [0, 2, 4, 7, 9] },
   loadShooter: { at: [LS], idx: [0, 2, 3, 5, 7, 9, 12, 14, 15] },
+  caller: {
+    at: [C],
+    idx: [0, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 16, 17, 18, 20, 22, 24, 25, 26, 27],
+  },
+  cluster: { at: [AFTER], idx: [0, 2, 4, 5, 6, 7, 9, 12, 13, 14] },
+  status9: { at: [ST9], idx: [0, 2] },
 }
 /** One case per opcode position, copy and change (a flip and a near-miss), each its own test. */
 const OPCODE_CASES: [string, number, number, number][] = Object.entries(OPCODES).flatMap(
@@ -467,7 +506,7 @@ describe('LoadClass reads the loader from its operands', () => {
   )
 
   it('the opcode positions are exactly the non-operand bytes of the shapes, and every one is a case', () => {
-    expect(OPCODE_CASES.length).toBe(2 * (25 + 2 * 7 + 10 + 5 + 9))
+    expect(OPCODE_CASES.length).toBe(2 * (25 + 2 * 7 + 10 + 5 + 9 + 21 + 10 + 2))
     for (const [name, shape] of Object.entries(SHAPES))
       expect(
         shape.flatMap((w, i) => (w === null ? [] : [i])),
