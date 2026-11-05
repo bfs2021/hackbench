@@ -306,6 +306,74 @@ const reasonOf = (rom: RomFile) => {
   return r.status === 'unavailable' ? r.reason : 'ok'
 }
 
+/** Each planted defect, the loader read it must break, and the reason it must give: one test per gate. */
+const GATES: [string, (put: (at: number, b: number[]) => void) => void, RegExp][] = [
+  [
+    'scroll subtract differs from compare',
+    put => put(SC + 18, [0xa1]),
+    /scroll test and the command number/,
+  ],
+  [
+    'generator subtract differs from compare',
+    put => put(G + 10, [0x51]),
+    /generator test and the number/,
+  ],
+  ['generator low branch elsewhere', put => put(G + 3, [0x20]), /hand lower ids to the shooter/],
+  [
+    'generator upper-bound branch into the generator path',
+    put => put(G + 7, [0x00]),
+    /upper bound does not skip/,
+  ],
+  [
+    'generator upper-bound branch elsewhere',
+    put => put(G + 7, [0x30]),
+    /upper bound does not skip/,
+  ],
+  ['generator skip-on hop elsewhere', put => put(G + 19, [0x00]), /go on to the next sprite/],
+  ['shooter skip-on hop elsewhere', put => put(SH + 8, [0x00]), /go on to the next sprite/],
+  ['the next-sprite branch is not a branch', put => put(NEXT, [0xea]), /go on to the next sprite/],
+  ['entry first skip is not a return', put => put(RET, [0xea]), /load start does not skip/],
+  [
+    'entry skips land in different places',
+    put => put(S + 14, [rel(S + 13, LN + 2)]),
+    /load start does not skip/,
+  ],
+  [
+    'entry skips both land inside the routine',
+    put => (put(S + 9, [rel(S + 8, S + 0x20)]), put(S + 14, [rel(S + 13, S + 0x20)])),
+    /load start does not skip/,
+  ],
+  ['scroll guard lands off a branch', put => put(GUARD, [0xea]), /guard does not skip/],
+  [
+    'scroll guard lands on a branch before its store',
+    put => (put(S + 3, [0x80]), put(SC + 11, [rel(SC + 10, S + 3)])),
+    /guard does not skip/,
+  ],
+  ['shooter low branch elsewhere', put => put(SH + 3, [0x06]), /hand lower ids on/],
+  ['scroll branch elsewhere', put => put(SC + 3, [0x10]), /does not lead through/],
+  ['Eeries branch elsewhere', put => put(E + 3, [0x02]), /does not lead through/],
+  ['platforms branch elsewhere', put => put(P + 3, [0x02]), /does not lead through/],
+  ['shooter bound not below generator', put => put(SH + 1, [0x55]), /not in an order/],
+  ['generator end past the scroll bound', put => put(G + 5, [0xb0]), /not in an order/],
+]
+
+/** Positions are written out here, not walked from SHAPES: nulling an opcode in the code under test must fail these. */
+const OPCODES: Record<string, { at: number[]; idx: number[] }> = {
+  scroll: { at: [S], idx: [0, 2, 4, 5, 6, 8, 10, 13, 15, 17, 20, 21, 23, 25, 26, 28, 30, 33, 36, 38, 39, 40, 42, 43, 45] }, // prettier-ignore
+  loaderCall: { at: [E, P], idx: [0, 2, 4, 5, 6, 7, 9] },
+  generator: { at: [G], idx: [0, 2, 4, 6, 8, 9, 11, 12, 15, 18] },
+  shooter: { at: [SH], idx: [0, 2, 4, 7, 9] },
+}
+/** One case per opcode position, copy and change (a flip and a near-miss), each its own test. */
+const OPCODE_CASES: [string, number, number, number][] = Object.entries(OPCODES).flatMap(
+  ([name, { at, idx }]) =>
+    at.flatMap(base =>
+      idx.flatMap(i =>
+        [0xff, 0x04].map(c => [name, base, i, c] as [string, number, number, number]),
+      ),
+    ),
+)
+
 describe('LoadClass reads the loader from its operands', () => {
   it('classes follow the planted bounds, not the game values or a fixed gap', () => {
     const r = loadClasses(cart())
@@ -316,95 +384,29 @@ describe('LoadClass reads the loader from its operands', () => {
     expect([0x4b, 0x4c, 0x4d].map(r.of)).toEqual(['shooter', 'shooter', 'shooter'])
   })
 
-  it('each gate fails the read when it is removed (one planted byte each)', () => {
-    const gates: [string, (put: (at: number, b: number[]) => void) => void, RegExp][] = [
-      [
-        'scroll subtract differs from compare',
-        put => put(SC + 18, [0xa1]),
-        /scroll test and the command number/,
-      ],
-      [
-        'generator subtract differs from compare',
-        put => put(G + 10, [0x51]),
-        /generator test and the number/,
-      ],
-      [
-        'generator low branch elsewhere',
-        put => put(G + 3, [0x20]),
-        /hand lower ids to the shooter/,
-      ],
-      [
-        'generator upper-bound branch into the generator path',
-        put => put(G + 7, [0x00]),
-        /upper bound does not skip/,
-      ],
-      [
-        'generator upper-bound branch elsewhere',
-        put => put(G + 7, [0x30]),
-        /upper bound does not skip/,
-      ],
-      ['generator skip-on hop elsewhere', put => put(G + 19, [0x00]), /go on to the next sprite/],
-      ['shooter skip-on hop elsewhere', put => put(SH + 8, [0x00]), /go on to the next sprite/],
-      [
-        'the next-sprite branch is not a branch',
-        put => put(NEXT, [0xea]),
-        /go on to the next sprite/,
-      ],
-      ['entry first skip is not a return', put => put(RET, [0xea]), /load start does not skip/],
-      [
-        'entry skips land in different places',
-        put => put(S + 14, [rel(S + 13, LN + 2)]),
-        /load start does not skip/,
-      ],
-      [
-        'entry skips both land inside the routine',
-        put => (put(S + 9, [rel(S + 8, S + 0x20)]), put(S + 14, [rel(S + 13, S + 0x20)])),
-        /load start does not skip/,
-      ],
-      ['scroll guard lands off a branch', put => put(GUARD, [0xea]), /guard does not skip/],
-      [
-        'scroll guard lands on a branch before its store',
-        put => (put(S + 3, [0x80]), put(SC + 11, [rel(SC + 10, S + 3)])),
-        /guard does not skip/,
-      ],
-      ['shooter low branch elsewhere', put => put(SH + 3, [0x06]), /hand lower ids on/],
-      ['scroll branch elsewhere', put => put(SC + 3, [0x10]), /does not lead through/],
-      ['Eeries branch elsewhere', put => put(E + 3, [0x02]), /does not lead through/],
-      ['platforms branch elsewhere', put => put(P + 3, [0x02]), /does not lead through/],
-      ['shooter bound not below generator', put => put(SH + 1, [0x55]), /not in an order/],
-      ['generator end past the scroll bound', put => put(G + 5, [0xb0]), /not in an order/],
-    ]
-    for (const [name, edit, why] of gates) expect(reasonOf(cart(edit)), name).toMatch(why)
+  it.each(GATES)('gate: %s', (_name, edit, why) => {
+    expect(reasonOf(cart(edit))).toMatch(why)
+  })
+
+  it('the unplanted fixture reads ok', () => {
     expect(reasonOf(cart())).toBe('ok')
   })
 
-  it('every opcode of every shape gates the read: a flip or a near-miss opcode makes it unavailable', () => {
-    // Positions are written out here, not walked from SHAPES: nulling an opcode in the code under test must fail this.
-    const scroll = [0, 2, 4, 5, 6, 8, 10, 13, 15, 17, 20, 21, 23, 25, 26, 28, 30, 33, 36, 38, 39, 40, 42, 43, 45] // prettier-ignore
-    const expected: Record<string, { at: number[]; idx: number[] }> = {
-      scroll: { at: [S], idx: scroll },
-      loaderCall: { at: [E, P], idx: [0, 2, 4, 5, 6, 7, 9] },
-      generator: { at: [G], idx: [0, 2, 4, 6, 8, 9, 11, 12, 15, 18] },
-      shooter: { at: [SH], idx: [0, 2, 4, 7, 9] },
-    }
-    let n = 0
-    for (const [name, { at, idx }] of Object.entries(expected))
-      for (const base of at)
-        for (const i of idx)
-          for (const change of [0xff, 0x04]) {
-            const rom = cart((_put, buf) => (buf[0x10000 + base + i]! ^= change))
-            expect(reasonOf(rom), `${name}[${i}] at ${base.toString(16)} ^ ${change}`).not.toBe(
-              'ok',
-            )
-            n++
-          }
-    expect(n).toBe(2 * (25 + 2 * 7 + 10 + 5))
-    // The positions are exactly the non-operand bytes of the shapes.
+  it.each(OPCODE_CASES)(
+    'opcode %s at +%i: a flip or a near-miss makes the read unavailable',
+    (name, base, i, change) => {
+      const rom = cart((_put, buf) => (buf[0x10000 + base + i]! ^= change))
+      expect(reasonOf(rom)).not.toBe('ok')
+    },
+  )
+
+  it('the opcode positions are exactly the non-operand bytes of the shapes, and every one is a case', () => {
+    expect(OPCODE_CASES.length).toBe(2 * (25 + 2 * 7 + 10 + 5))
     for (const [name, shape] of Object.entries(SHAPES))
       expect(
         shape.flatMap((w, i) => (w === null ? [] : [i])),
         name,
-      ).toEqual(expected[name]!.idx)
+      ).toEqual(OPCODES[name]!.idx)
   })
 
   it('the order gate is exact: generator end above its start and not past the scroll bound', () => {
