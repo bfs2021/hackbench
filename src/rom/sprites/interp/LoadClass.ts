@@ -23,23 +23,169 @@ export type LoadClasses =
 const BANK2 = 0x028000
 // null matches any byte (an operand or a branch displacement); the rest are opcodes.
 /** The entry's fall-through into the scroll test: skip unless at the screen boundary and not loaded yet, mark loaded, store the number. */
-const ENTRY = [0xd0, null, 0xb7, null, 0x29, 0xf0, 0xc5, null, 0xd0, null, 0xbd, null, null, 0xd0, null, 0x86, null, 0xfe, null, null, 0xc8, 0xb7, null, 0x85, null, 0x88] // prettier-ignore
+const ENTRY = [
+  0xd0,
+  null,
+  0xb7,
+  null,
+  0x29,
+  0xf0,
+  0xc5,
+  null,
+  0xd0,
+  null,
+  0xbd,
+  null,
+  null,
+  0xd0,
+  null,
+  0x86,
+  null,
+  0xfe,
+  null,
+  null,
+  0xc8,
+  0xb7,
+  null,
+  0x85,
+  null,
+  0x88,
+]
 /** Then CMP, BCC, the scroll-command store. */
-const SCROLL = [...ENTRY, 0xc9, null, 0x90, null, 0xad, null, null, 0x0d, null, null, 0xd0, null, 0x5a, 0xda, 0xa5, null, 0x38, 0xe9, null, 0x8d, null, null] // prettier-ignore
+const SCROLL = [
+  ...ENTRY,
+  0xc9,
+  null,
+  0x90,
+  null,
+  0xad,
+  null,
+  null,
+  0x0d,
+  null,
+  null,
+  0xd0,
+  null,
+  0x5a,
+  0xda,
+  0xa5,
+  null,
+  0x38,
+  0xe9,
+  null,
+  0x8d,
+  null,
+  null,
+]
 /** The Eeries and platforms tests: CMP, BNE past a call that saves X and Y. */
-const LOADER_CALL = [0xc9, null, 0xd0, null, 0x5a, 0xda, 0x88, 0x84, null, 0x20, null, null] // prettier-ignore
+const LOADER_CALL = [0xc9, null, 0xd0, null, 0x5a, 0xda, 0x88, 0x84, null, 0x20, null, null]
 /** Compare, below-range branch, upper compare, upper-bound branch, the generator number store, free the slot, skip to the next sprite. */
-const GENERATOR = [0xc9, null, 0x90, null, 0xc9, null, 0xb0, null, 0x38, 0xe9, null, 0x1a, 0x8d, null, null, 0x9e, null, null, 0x80, null] // prettier-ignore
-const SHOOTER = [0xc9, null, 0x90, null, 0x20, null, null, 0x80, null, 0xa9] // prettier-ignore
+const GENERATOR = [
+  0xc9,
+  null,
+  0x90,
+  null,
+  0xc9,
+  null,
+  0xb0,
+  null,
+  0x38,
+  0xe9,
+  null,
+  0x1a,
+  0x8d,
+  null,
+  null,
+  0x9e,
+  null,
+  null,
+  0x80,
+  null,
+]
+const SHOOTER = [0xc9, null, 0x90, null, 0x20, null, null, 0x80, null, 0xa9]
 /** The loop that calls the routine: read a sprite, stop at the end mark, compare its screen, branch to the routine, else step on. */
-const CALLER = [0xb7, null, 0xc9, 0xff, 0xf0, null, 0x0a, 0x0a, 0x0a, 0x29, 0x10, 0x85, null, 0xc8, 0xb7, null, 0x29, 0x0f, 0x05, null, 0xc5, null, 0xb0, null, 0xc8, 0xc8, 0xe8, 0x80, null] // prettier-ignore
+const CALLER = [
+  0xb7,
+  null,
+  0xc9,
+  0xff,
+  0xf0,
+  null,
+  0x0a,
+  0x0a,
+  0x0a,
+  0x29,
+  0x10,
+  0x85,
+  null,
+  0xc8,
+  0xb7,
+  null,
+  0x29,
+  0x0f,
+  0x05,
+  null,
+  0xc5,
+  null,
+  0xb0,
+  null,
+  0xc8,
+  0xc8,
+  0xe8,
+  0x80,
+  null,
+]
 /** Above the generators: the test for the cluster spawners (a compare, then a call that saves X and Y). */
-const CLUSTER = [0xc9, null, 0x90, null, 0xda, 0x5a, 0x88, 0x84, null, 0x20, null, null, 0x7a, 0xfa, 0x80, null] // prettier-ignore
+const CLUSTER = [
+  0xc9,
+  null,
+  0x90,
+  null,
+  0xda,
+  0x5a,
+  0x88,
+  0x84,
+  null,
+  0x20,
+  null,
+  null,
+  0x7a,
+  0xfa,
+  0x80,
+  null,
+]
 /** The carried-shell path under it: set the status, go to the slot loader. */
-const STATUS9 = [0xa9, null, 0x80, null] // prettier-ignore
+const STATUS9 = [0xa9, null, 0x80, null]
 /** The shooter loader's opening: save the entry, index and number, start the slot search over the shooter table. */
-const LOAD_SHOOTER = [0x86, null, 0x88, 0x84, null, 0x85, null, 0xa2, null, 0xbd, null, null, 0xf0, null, 0xca, 0x10, null] // prettier-ignore
-export const SHAPES = { scroll: SCROLL, loaderCall: LOADER_CALL, generator: GENERATOR, shooter: SHOOTER, loadShooter: LOAD_SHOOTER, caller: CALLER, cluster: CLUSTER, status9: STATUS9 } // prettier-ignore
+const LOAD_SHOOTER = [
+  0x86,
+  null,
+  0x88,
+  0x84,
+  null,
+  0x85,
+  null,
+  0xa2,
+  null,
+  0xbd,
+  null,
+  null,
+  0xf0,
+  null,
+  0xca,
+  0x10,
+  null,
+]
+export const SHAPES = {
+  scroll: SCROLL,
+  loaderCall: LOADER_CALL,
+  generator: GENERATOR,
+  shooter: SHOOTER,
+  loadShooter: LOAD_SHOOTER,
+  caller: CALLER,
+  cluster: CLUSTER,
+  status9: STATUS9,
+}
 
 // Byte offsets inside the shapes, named (SCROLL ones count from the scroll CMP, after ENTRY).
 const SKIP_A = 8 // entry: the second skip branch
@@ -136,9 +282,14 @@ function read(rom: RomFile): LoadClasses {
   // The chain the game walks, each hop by the branch's own destination.
   const eeries = target(code, sc + SC_BCC)
   const platforms = target(code, eeries + 2)
-  // prettier-ignore
-  if (!matches(code, eeries, LOADER_CALL) || !matches(code, platforms, LOADER_CALL) || target(code, platforms + 2) !== ge)
-    return fail('the scroll test does not lead through the Eeries and platform tests to the generator test')
+  if (
+    !matches(code, eeries, LOADER_CALL) ||
+    !matches(code, platforms, LOADER_CALL) ||
+    target(code, platforms + 2) !== ge
+  )
+    return fail(
+      'the scroll test does not lead through the Eeries and platform tests to the generator test',
+    )
   if (target(code, ge! + GEN_BCC) !== sh)
     return fail('the generator test does not hand lower ids to the shooter test')
   // The upper-bound branch must skip the whole generator path: land just past its block (the game's next compare).
@@ -151,22 +302,41 @@ function read(rom: RomFile): LoadClasses {
   // One proven way on to the next sprite, `ln`: the entry's two skips land there, and every other exit (generator tail, shooter
   // tail, scroll guard) must be a BRA to it. No exit may land inside a matched shape (an operand byte can look like a BRA).
   const [skip, ln, past] = [target(code, s!), target(code, s! + SKIP_A), ge! + GENERATOR.length]
-  const spans = [[s!, s! + SCROLL.length], [eeries, eeries + LOADER_CALL.length], [platforms, platforms + LOADER_CALL.length], [ge!, ge! + GENERATOR.length], [sh!, sh! + SHOOTER.length], [cl!, cl! + CALLER.length], [past, sh!]] // prettier-ignore
+  const spans = [
+    [s!, s! + SCROLL.length],
+    [eeries, eeries + LOADER_CALL.length],
+    [platforms, platforms + LOADER_CALL.length],
+    [ge!, ge! + GENERATOR.length],
+    [sh!, sh! + SHOOTER.length],
+    [cl!, cl! + CALLER.length],
+    [past, sh!],
+  ]
   const inside = (a: number) => spans.some(([lo, hi]) => a >= lo! && a < hi!)
   const viaBra = (a: number) => b(a) === 0x80 && target(code, a) === ln && !inside(a)
   if (b(skip) !== 0x60 || ln !== target(code, s! + SKIP_B) || ln !== cl! + CL_STEP || inside(skip))
     return fail('the sprite load start does not skip the way the loader does')
   // The caller loop: its branch reaches the routine start, its end-of-list branch the return, and it repeats.
-  // prettier-ignore
-  if (target(code, cl! + CL_BCS) !== s || target(code, cl! + CL_END) !== skip || target(code, cl! + CL_BRA) !== cl)
-    return fail('the caller loop does not branch to the routine start, return at the end of the list and repeat')
+  if (
+    target(code, cl! + CL_BCS) !== s ||
+    target(code, cl! + CL_END) !== skip ||
+    target(code, cl! + CL_BRA) !== cl
+  )
+    return fail(
+      'the caller loop does not branch to the routine start, return at the end of the list and repeat',
+    )
   const next = target(code, ge! + GEN_TAIL)
   if (target(code, sh! + SH_BRA) !== next || !viaBra(next))
     return fail('the generator and shooter paths do not both go on to the next sprite')
   // Above the generators: the cluster test (its below-range branch the carried-shell path), then the shooter test right after.
   const st9 = past + CLUSTER.length
-  // prettier-ignore
-  if (!matches(code, past, CLUSTER) || target(code, past + CLU_BCC) !== st9 || target(code, past + CLU_BRA) !== next || !matches(code, st9, STATUS9) || target(code, st9 + 2) !== sh! + SH_PAST + 2 || st9 + STATUS9.length !== sh)
+  if (
+    !matches(code, past, CLUSTER) ||
+    target(code, past + CLU_BCC) !== st9 ||
+    target(code, past + CLU_BRA) !== next ||
+    !matches(code, st9, STATUS9) ||
+    target(code, st9 + 2) !== sh! + SH_PAST + 2 ||
+    st9 + STATUS9.length !== sh
+  )
     return fail('the generator upper-bound path does not lead on to the shooter test')
   const guard = target(code, sc + SC_GUARD)
   if (!viaBra(guard) || guard <= sc)
@@ -179,10 +349,18 @@ function read(rom: RomFile): LoadClasses {
   // and the scroll bound: one inside the shooter or generator band would be a class this reader would call wrongly.
   for (const id of [b(eeries + 1), b(platforms + 1)])
     if (id < genTo || id >= scrollFrom)
-      return fail('the Eeries or platform test takes ids from outside the range between the generators and the scroll commands') // prettier-ignore
+      return fail(
+        'the Eeries or platform test takes ids from outside the range between the generators and the scroll commands',
+      )
   return {
     status: 'ok',
     of: id =>
-      id >= scrollFrom ? 'scroll' : id >= genFrom && id < genTo ? 'generator' : id >= shootFrom && id < genFrom ? 'shooter' : 'normal', // prettier-ignore
+      id >= scrollFrom
+        ? 'scroll'
+        : id >= genFrom && id < genTo
+          ? 'generator'
+          : id >= shootFrom && id < genFrom
+            ? 'shooter'
+            : 'normal',
   }
 }
