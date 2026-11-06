@@ -26,6 +26,7 @@ const WHY_NOT_DRAWN: Record<string, string> = {
   noParts: 'Its code drew no tiles.',
   charsNotLoaded: 'Some of its graphics are not loaded on this map.',
   noDescriptor: 'The app has no drawing rules for this sprite yet.',
+  unrevealed: 'It draws nothing at first, and the app could not tell what reveals it.',
 }
 
 /** Why a sprite is a marker, in words. The engine's reason codes never reach the screen: an unknown one gets the generic line. */
@@ -143,13 +144,16 @@ export const noteTitle = (
       : undefined
 
 /** The quiet marker's tooltip and Properties line (#1011): the sprite's name, then why nothing shows. Plain words. */
-export function quietText(s: Pick<MapSpriteDto, 'kind' | 'name'>): string {
+export function quietText(s: Pick<MapSpriteDto, 'kind' | 'name' | 'reason'>): string {
   if (s.kind === 'scroll')
     return 'Scroll command: changes how the screen scrolls; it has no picture in the game'
   if (s.kind === 'shooter')
     return `${s.name ?? 'Shooter'}: fires on a timer; nothing is drawn until it does`
   if (s.kind === 'generator')
     return `${s.name ?? 'Generator'}: runs in the background; it has no picture on the map`
+  // A reason the Properties view has words for says why (the reveal search found no condition, #1132).
+  const why = s.reason ? WHY_NOT_DRAWN[s.reason] : undefined
+  if (why) return s.name ? `${s.name}: ${why}` : why
   // The words claim only what was checked: nothing drew in the app's run, which cannot tell a sprite that shows only in play.
   return s.name
     ? `${s.name}: nothing is drawn for it on the map; it may only show up in play`

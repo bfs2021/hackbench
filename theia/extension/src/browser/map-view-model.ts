@@ -13,6 +13,7 @@ import { BLOCK, indicatorBox, paintIndicator, type Box } from '../common/block-i
 import {
   composeScreen,
   doorFlips,
+  WHOLE_DOOR,
   type SourceKey,
   type ScreenInput,
 } from '../../../../src/rom/model/ColorMath'
@@ -103,12 +104,13 @@ export function spriteAt(
 export const hoverPlacementKey = (zoom: number, rect: { left: number; top: number }): string =>
   `${zoom}:${Math.round(rect.left)}:${Math.round(rect.top)}`
 
-/** What the hover shows for a sprite (#981): its plain name only, or nothing when the name table has none. */
+/** What the hover shows for a sprite (#981): a quiet marker's words, else its plain name, with what makes a revealed one appear after a colon (#1132); nothing when it has neither. */
 export function spriteName(
-  s: Pick<MapSpriteDto, 'name' | 'kind' | 'status' | 'reason'>,
+  s: Pick<MapSpriteDto, 'name' | 'reveal' | 'id' | 'kind' | 'status' | 'reason'>,
 ): string | undefined {
   if (s.status === 'quiet') return quietText(s)
-  return s.name || undefined
+  if (!s.reveal) return s.name || undefined
+  return `${s.name || `Sprite $${s.id.toString(16).toUpperCase().padStart(2, '0')}`}: ${s.reveal}`
 }
 
 /**
@@ -137,6 +139,8 @@ function spriteLayer(
     const [cy0, cy1] = [Math.max(y0, top), Math.min(y1, top + g.height)]
     if (cx0 >= cx1 || cy0 >= cy1) continue
     const bmp = bitmapOf(s)
+    // A hidden sprite shown whole in the screen door carries the flag in its door id (ColorMath's WHOLE_DOOR).
+    const id = s.screenDoor ? WHOLE_DOOR : 0
     out ??= { rgba: new Uint8ClampedArray(g.width * g.height * 4), prio: new Uint8Array(g.width * g.height), door: new Uint32Array(g.width * g.height) } // prettier-ignore
     for (let y = cy0; y < cy1; y++) {
       for (let x = cx0; x < cx1; x++) {
@@ -147,7 +151,7 @@ function spriteLayer(
         // No priority: a placeholder, at the pre-#795 slot.
         out.prio[to] = bmp.prio ? bmp.prio[from]! : 2
         // The quiet marker is never dithered by the screen door: it is a hint on the tile, not a sprite to see through.
-        out.door[to] = s.status === 'quiet' ? 0 : ((n + 1) << 1) | ((x - x0 + (y - y0)) & 1)
+        out.door[to] = s.status === 'quiet' ? 0 : (((n + 1) | id) << 1) | ((x - x0 + (y - y0)) & 1)
       }
     }
   }
@@ -254,6 +258,8 @@ export function liftIfCovered(
   covered: Iterable<ReadonlySet<number>>,
 ): number | undefined {
   if (!id) return undefined
+  // A whole-door sprite is see-through everywhere, so it lifts wherever it is.
+  if (id & WHOLE_DOOR) return id
   for (const c of covered) if (c.has(id)) return id
   return undefined
 }

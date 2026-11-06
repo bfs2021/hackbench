@@ -226,6 +226,17 @@ describe('plain words', () => {
     for (const w of words) expect(w).not.toMatch(/OAM|pass|\$|0x|github|water|fog/i)
   })
 
+  it('a sprite the reveal search could not explain is a quiet marker with the words for it (#1132)', () => {
+    const unrevealed = { ok: false, reason: 'unrevealed', empty: true } as const
+    const [d] = run([sprite(0x4d)], { 0x4d: unrevealed })
+    expect(d).toMatchObject({ status: 'quiet', reason: 'unrevealed' })
+    const words = 'It draws nothing at first, and the app could not tell what reveals it.'
+    expect(quietText(d!)).toBe(words)
+    expect(quietText({ kind: undefined, name: 'Monty Mole', reason: 'unrevealed' })).toBe(
+      'Monty Mole: ' + words,
+    )
+  })
+
   it('the hover and Properties carry it; a failed sprite keeps the old line', () => {
     const [q, f] = run([sprite(0xe8, 0), sprite(2, 1)], { 0xe8: { ok: false, reason: 'r', routed: 'scroll' }, 2: { ok: false, reason: 'refused: x' } }) // prettier-ignore
     expect(spriteName(q!)).toMatch(/^Scroll command/)
