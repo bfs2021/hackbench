@@ -393,11 +393,22 @@ describe('neighboursOf', () => {
 
   it('leaves out an entry with the extra bit (raw[0] bit 3), keeps the rest whatever the other low bits (#1173)', () => {
     const me = sp(0, 4, 70)
-    for (let raw0 = 0; raw0 < 16; raw0++) {
+    for (let raw0 = 0; raw0 < 0xff; raw0++) {
+      // YYYYEEsy; $FF ends the list (bank_02.asm:5253-5255)
       const other = { ...sp(1, 4, 71), raw: [raw0, 0, 0] }
       expect(neighboursOf([me, other], me, px).length, `raw[0]=${raw0}`).toBe(raw0 & 0x08 ? 0 : 1)
     }
     expect(neighboursOf([me, { ...sp(1, 4, 71), raw: [] }], me, px)).toHaveLength(1) // no byte: not flagged
+  })
+
+  it('filters before it caps: nine nearer extra-bit entries do not crowd out a farther stock one (#1173)', () => {
+    const me = sp(0, 4, 70)
+    const near = Array.from({ length: 9 }, (_, i) => ({
+      ...sp(i + 1, 4, 71 + i),
+      raw: [0x08, 0, 0],
+    }))
+    const far = sp(10, 4, 90)
+    expect(neighboursOf([me, ...near, far], me, px).map(n => n.index)).toEqual([10])
   })
 
   it('orders by distance in x and y together, not x alone', () => {

@@ -94,6 +94,13 @@ describe('spriteAt', () => {
     }
   })
 
+  it('a parent at list index 0 works the same, and a child with no parent in the list is never hit alone (#1173)', () => {
+    const parent = dto(0x9c, 0, [1, 0], [2, 1])
+    const child = dto(0x9b, 1, [1, 0], [2, 1], [], { drawnBy: 0 })
+    expect(spriteAt([parent, child], H, 1, 0)).toBe(child)
+    expect(spriteAt([child], H, 1, 0)).toBeUndefined()
+  })
+
   it('a sprite stacked between a parent and its child keeps the hit at a shared pixel (#1173)', () => {
     const parent = dto(0x9c, 1, [1, 0], [2, 1])
     const c = dto(0x10, 2, [1, 0], [2, 1])

@@ -92,7 +92,7 @@ export function spriteAt(
   for (let n = order.length - 1; n >= 0; n--) {
     const s = order[n]!
     if (s.drawnBy !== undefined || !opaqueAt(s, px, py)) continue
-    // A sprite its parent drew is inside the parent's bitmap, which wins here when it sorts on top: the child takes the hit (D52).
+    // A sprite its parent drew is inside the parent's bitmap: the child takes the hit where it has a pixel, whichever sorts on top (D52).
     return order.find(c => c.drawnBy === s.index && opaqueAt(c, px, py)) ?? s
   }
   return undefined

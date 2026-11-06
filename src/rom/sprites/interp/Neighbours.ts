@@ -5,7 +5,7 @@
 import type { LevelSprite } from '../../LevelParser'
 import type { SpriteSeed } from './SpriteSeed'
 
-/** Bit 3 of a list entry's first byte: the entry carries extra bytes, so it may be a custom sprite, not the stock id. */
+/** Bit 3 of a list entry's first byte (YYYYEEsy, bank_02.asm:5253): the entry may be a custom sprite, not the stock id. */
 export const EXTRA_BITS = 0x08
 
 /** The scan covers slots 0-9; the sprite under test takes one of them. */
