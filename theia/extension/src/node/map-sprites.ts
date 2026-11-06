@@ -73,7 +73,7 @@ import {
   type FlameRoutines,
 } from '../../../../src/rom/sprites/interp/CastleFlames'
 import { levelSeed } from '../../../../src/rom/sprites/interp/LevelLoader'
-import { neighboursOf } from '../../../../src/rom/sprites/interp/Neighbours'
+import { EXTRA_BITS, neighboursOf } from '../../../../src/rom/sprites/interp/Neighbours'
 import {
   EERIES_COUNT,
   fiveEeries,
@@ -115,7 +115,6 @@ import type {
 import { screenTiles, unreadable, type L1ModelCache } from './map-screen'
 
 const TILE = 16
-const EXTRA_BITS = 0x08
 const NO_FLAGS: SwitchFlagsDto = { yellow: false, green: false, red: false, blue: false }
 /** Bytes of a level's sprite stream read; a longer one is noted, not silently cut. */
 export const STREAM_WINDOW = 0x200
