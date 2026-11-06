@@ -6,25 +6,25 @@
  * The class is read by effect, not by shape: the ROM's own routine runs on the 65816 core, once per id with a one-entry
  * list, and the class is the first of three RAM cells it writes (the scroll command, the generator number, the shooter
  * table; rammap.asm). A run that reaches its return with none of them is a normal sprite. The one fixed call site is
- * checked as a single JSR opcode and its target is READ from the operand, so a hack that moves the routine still reads;
- * the target must open with a load of a direct-page cell. A run that leaves ROM, hits BRK, spends the step cap or
- * returns with the stack wrong makes the whole table `status: 'unavailable'`, with the id and the reason. A return
- * through another bank's mirror of bank 2 is a return.
+ * checked as a single JSR opcode, as are the 8 calls before it (the straight run back to the last branch target, :1402-1409),
+ * and its target is READ from the operand, so a hack that moves the routine still reads; the target must open with a
+ * load of a direct-page cell. A run that leaves ROM, hits BRK, spends the step cap or returns with the stack wrong makes
+ * the whole table `status: 'unavailable'`, with the id and the reason. A return through another bank's mirror of bank 2
+ * is a return.
  *
- * Each run must read the entry's id before it writes or returns, and the table must hold both routed and normal ids, or it
- * proves nothing and is unavailable. Within each class the value written must step with the id (id minus a constant),
+ * Each run must read the entry's id before it writes or returns, and the table must hold both routed and normal ids, or
+ * it proves nothing and is unavailable. Within each class the value written must step with the id (id minus a constant),
  * each class must be one run of at least two ids, and the runs must come shooter, generator, scroll; anything else is
  * unavailable (a hack that writes a cell for every id would otherwise read as a class). The scroll ids are then run again
  * with extra bit 3 of the entry set, because some hacks move the bands with it (measured); `of(id, true)` is `scroll`
- * only for an id that is a scroll command in both sweeps, storing the same value in the same cell (all or nothing: one scroll id that differs takes every exemption), and `normal` for every
- * other (the extra-bits gate keeps its box). Every run starts from a restored
- * machine with A, X and Y zero. Seeded: the sprite list pointer and
- * one entry on the screen boundary, the scroll direction that makes that boundary offset zero, DB = 2. Not seen:
- * everything after the first write to a cell (a scroll command's setup call leaves ROM or unbalances the stack on some
- * ids past the table), extra bit 2 and a vertical level (neither moved a band in the measured ROMs), whether the game
- * reaches the routine on a given frame, and what a hook does after the cell is written. Evidence: vanilla and the Magic
- * ROM read the same table (ids 0-200 normal, 201-202 shooter, 203-217 generator, 218-230 normal, 231-255 scroll, bit 3
- * clear); hacks in docs/rom/map-data-mechanics.md (one machine, 2026-11-05).
+ * only for an id that is a scroll command in both sweeps, storing the same value in the same cell (all or nothing: one
+ * that differs takes every exemption), and `normal` for every other (the extra-bits gate keeps its box). Every run starts
+ * from a restored machine with A, X and Y zero. Seeded: the sprite list pointer and one entry on the screen boundary, the
+ * scroll direction that makes that boundary offset zero, DB = 2. Not seen: everything after the first write to a cell (a scroll command's setup call leaves ROM or unbalances the stack
+ * on some ids past the table), extra bit 2 and a vertical level (no band moved), whether the game reaches the routine on
+ * a given frame, what a hook does after the cell is written, the code before the walk, and a hook inside a called routine
+ * that leaves the loop. Evidence: the vanilla and Magic ROMs read the same table, and three hacks; the ids and the other
+ * ROMs are in docs/rom/map-data-mechanics.md (one machine, 2026-11-05).
  */
 import { Refusal, SENTINEL, callSubroutine, type CallResult } from '../../cpu/call'
 import type { Cpu65816 } from '../../cpu/Cpu65816'
@@ -41,6 +41,8 @@ export type LoadClasses =
 /** The call in the sprite main loop (bank_02.asm:1410): one JSR opcode, whose operand is the routine. */
 const CALL_SITE = 0x028b1d
 const JSR = 0x20
+/** The calls in a straight run before the site, back to the last branch target (bank_02.asm:1402-1409), 3 bytes each. */
+const CALLS_BEFORE = 8
 /** The routine opens with a load of a direct-page cell (bank_02.asm:5224). */
 const LDA_DP = 0xa5
 const BANK2 = 0x020000
@@ -88,6 +90,10 @@ function entryOf(rom: RomFile): number | string {
   const site = rom.readAt(CALL_SITE, 3)
   if (!site || site[0] !== JSR)
     return 'the sprite main loop does not call the level loader at the place it does in the game'
+  // A hack that diverts just before the site would leave the site intact: only the opcodes of the run are looked at.
+  for (let k = 1; k <= CALLS_BEFORE; k++)
+    if (rom.readAt(CALL_SITE - 3 * k, 1)?.[0] !== JSR)
+      return "the sprite main loop has been changed just before the level loader's call"
   const entry = BANK2 | site[1]! | (site[2]! << 8)
   return rom.readAt(entry, 1)?.[0] === LDA_DP
     ? entry

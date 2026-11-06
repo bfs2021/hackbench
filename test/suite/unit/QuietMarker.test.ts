@@ -248,6 +248,8 @@ describe('plain words', () => {
 // the id when a run starts from stale state (X, Y, SRAM, a WRAM latch), so each seed and each reset has a test that fails
 // without it. No two adjacent instructions here are an adjacent pair of the game's routine (bank_02.asm:5223-5368), compared by eye against that listing; rom-window-probe --bin over the assembled bytes reports no 8-byte window.
 const SITE = 0x028b1d
+/** How many calls the reader checks before the site. */
+const WALK = 8
 const ROUTINE = 0x029000
 const TABLE = 0x029100
 const TABLE_BIT3 = 0x029200
@@ -439,6 +441,8 @@ function cart(
     ],
   )
   put(SITE, [0x20, ROUTINE & 0xff, (ROUTINE >> 8) & 0xff])
+  // The main loop's run of calls just before the site: the reader only looks for the call opcode, never the targets.
+  for (let k = 1; k <= WALK; k++) put(SITE - 3 * k, [0x20, 0x00 + k, 0x94 - k])
   put(ROUTINE, new Array(0x100).fill(0x4b)) // filler after the code, never run
   put(ROUTINE, code)
   put(
@@ -588,6 +592,20 @@ describe('LoadClass runs the loader and reads the class from what it writes', ()
     ['the ROM is not LoROM', cart({}, put => put(0x00ffd5, [0x21])), /not LoROM/],
   ] as [string, RomFile, RegExp][])('unavailable when %s', (_title, rom, why) => {
     expect(reasonOf(rom)).toMatch(why)
+  })
+
+  it.each(Array.from({ length: WALK }, (_, i) => i + 1))(
+    'unavailable when the call %i before the site is not a call',
+    k => {
+      const rom = cart({}, put => put(SITE - 3 * k, [0xea]))
+      expect(reasonOf(rom)).toMatch(
+        /main loop has been changed just before the level loader's call/,
+      )
+    },
+  )
+
+  it('a byte outside the walk (27 before the site) is not looked at', () => {
+    expect(reasonOf(cart({}, put => put(SITE - 3 * WALK - 3, [0xea])))).toBe('ok')
   })
 
   it('a ROM with no loader at all is unavailable', () => {
