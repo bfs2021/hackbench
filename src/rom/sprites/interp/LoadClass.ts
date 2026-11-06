@@ -26,7 +26,14 @@
  * that leaves the loop. Evidence: the vanilla and Magic ROMs read the same table, and three hacks; the ids and the other
  * ROMs are in docs/rom/map-data-mechanics.md (one machine, 2026-11-05).
  */
-import { Refusal, SENTINEL, callSubroutine, type CallResult } from '../../cpu/call'
+import {
+  Refusal,
+  SENTINEL,
+  callSubroutine,
+  nativeReset,
+  runUntil,
+  type CallResult,
+} from '../../cpu/call'
 import type { Cpu65816 } from '../../cpu/Cpu65816'
 import type { RomFile } from '../../RomFile'
 import { mapperProblem } from './Guards'
@@ -41,8 +48,10 @@ export type LoadClasses =
 /** The call in the sprite main loop (bank_02.asm:1410): one JSR opcode, whose operand is the routine. */
 const CALL_SITE = 0x028b1d
 const JSR = 0x20
-/** The calls in a straight run before the site, back to the last branch target (bank_02.asm:1402-1409), 3 bytes each. */
-const CALLS_BEFORE = 8
+/** The first of the 8 calls in the straight run before the site (bank_02.asm:1402-1409): the stretch is run from here. */
+const STRETCH_AT = 0x028b05
+/** Instructions the stretch may take: the vanilla run is a few hundred, and a callee that loops is refused. */
+const STRETCH_CAP = 10_000
 /** The routine opens with a load of a direct-page cell (bank_02.asm:5224). */
 const LDA_DP = 0xa5
 const BANK2 = 0x020000
@@ -90,14 +99,31 @@ function entryOf(rom: RomFile): number | string {
   const site = rom.readAt(CALL_SITE, 3)
   if (!site || site[0] !== JSR)
     return 'the sprite main loop does not call the level loader at the place it does in the game'
-  // A hack that diverts just before the site would leave the site intact: only the opcodes of the run are looked at.
-  for (let k = 1; k <= CALLS_BEFORE; k++)
-    if (rom.readAt(CALL_SITE - 3 * k, 1)?.[0] !== JSR)
-      return "the sprite main loop has been changed just before the level loader's call"
   const entry = BANK2 | site[1]! | (site[2]! << 8)
   return rom.readAt(entry, 1)?.[0] === LDA_DP
     ? entry
     : "the level loader's call goes to something that does not open the way the loader does"
+}
+
+/**
+ * Runs the main loop's stretch before the call on the core (the calls run as ROM code, none is restated here) and
+ * returns why it does not arrive at the loader's `entry` with the stack where the site's own JSR leaves it, or null.
+ * Arriving from inside a callee, or after a pop out of the stretch, has another depth and is refused. A hook that
+ * returns normally still arrives; nothing above the stretch is run.
+ */
+function stretchProblem(cpu: Cpu65816, entry: number): string | null {
+  nativeReset(cpu)
+  cpu.db = ENTRY_DB
+  cpu.pb = STRETCH_AT >> 16
+  cpu.pc = STRETCH_AT & 0xffff
+  const s0 = cpu.s
+  const at = (c: Cpu65816) => c.pc === (entry & 0xffff) && (c.pb & 0x7f) === BANK2 >> 16
+  const off = (c: Cpu65816): CallResult | null =>
+    c.s > s0 || (at(c) && c.s !== s0 - 2) ? { kind: 'refused', reason: '', at: 0, steps: 0 } : null
+  const r = runUntil(cpu, STRETCH_CAP, c => at(c) && c.s === s0 - 2, off)
+  return r.kind === 'returned'
+    ? null
+    : "the sprite main loop does not reach the level loader's call"
 }
 
 /** Whether a call ended at its return; a stack-balanced arrival at the return address in another bank's mirror of bank 2 counts. */
@@ -152,6 +178,13 @@ export function loadClasses(rom: RomFile): LoadClasses {
 /** Runs the routine for each id, then the scroll ids again with extra bit 3 set, on one machine put back between runs, and remembers the verdict. */
 function run(rom: RomFile, entry: number, key: string): LoadClasses {
   const { bus, cpu } = smwMachine(rom)
+  cache.track(bus, rom)
+  // The stretch runs on zeroed state with the cell hooks off (a write to a routing cell here means nothing), then the
+  // machine is put back, so nothing it left reaches the sweeps. Seeds: DB = 2 and WRAM zero; the sweeps' seeds are not needed.
+  const blank = bus.snapshot()
+  const unreached = stretchProblem(cpu, entry)
+  if (unreached) return cache.store(rom, key, bus, fail(unreached))
+  bus.restore(blank)
   const w = bus.wram
   w[SCROLL_DIR] = BOUNDARY_ZERO
   w.set([LIST_AT & 0xff, LIST_AT >> 8, WRAM_BANK], SPRITE_DATA_PTR)
@@ -167,7 +200,6 @@ function run(rom: RomFile, entry: number, key: string): LoadClasses {
     seen.row = { cls, value }
     throw new Refusal('decided') // the class is known at the first write; what follows is not run
   }
-  cache.track(bus, rom)
   /** One row per id of `ids`, run with `flags` in the entry, or why the runs prove nothing. */
   const sweep = (flags: number, ids: number[]): Row[] | string => {
     const rows: Row[] = []

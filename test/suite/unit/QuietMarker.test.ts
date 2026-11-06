@@ -248,8 +248,9 @@ describe('plain words', () => {
 // the id when a run starts from stale state (X, Y, SRAM, a WRAM latch), so each seed and each reset has a test that fails
 // without it. No two adjacent instructions here are an adjacent pair of the game's routine (bank_02.asm:5223-5368), compared by eye against that listing; rom-window-probe --bin over the assembled bytes reports no 8-byte window.
 const SITE = 0x028b1d
-/** How many calls the reader checks before the site. */
-const WALK = 8
+/** How many calls the fixture has before the site, and where the stub each one calls is. */
+const CALLS = 8
+const stub = (k: number) => 0x029300 + 0x10 * k
 const ROUTINE = 0x029000
 const TABLE = 0x029100
 const TABLE_BIT3 = 0x029200
@@ -441,8 +442,11 @@ function cart(
     ],
   )
   put(SITE, [0x20, ROUTINE & 0xff, (ROUTINE >> 8) & 0xff])
-  // The main loop's run of calls just before the site: the reader only looks for the call opcode, never the targets.
-  for (let k = 1; k <= WALK; k++) put(SITE - 3 * k, [0x20, 0x00 + k, 0x94 - k])
+  // The main loop's stretch before the site: eight calls to invented stubs that just return, run on the core.
+  for (let k = 1; k <= CALLS; k++) {
+    put(SITE - 3 * k, [0x20, stub(k) & 0xff, stub(k) >> 8])
+    put(stub(k), [RTS])
+  }
   put(ROUTINE, new Array(0x100).fill(0x4b)) // filler after the code, never run
   put(ROUTINE, code)
   put(
@@ -594,20 +598,6 @@ describe('LoadClass runs the loader and reads the class from what it writes', ()
     expect(reasonOf(rom)).toMatch(why)
   })
 
-  it.each(Array.from({ length: WALK }, (_, i) => i + 1))(
-    'unavailable when the call %i before the site is not a call',
-    k => {
-      const rom = cart({}, put => put(SITE - 3 * k, [0xea]))
-      expect(reasonOf(rom)).toMatch(
-        /main loop has been changed just before the level loader's call/,
-      )
-    },
-  )
-
-  it('a byte outside the walk (27 before the site) is not looked at', () => {
-    expect(reasonOf(cart({}, put => put(SITE - 3 * WALK - 3, [0xea])))).toBe('ok')
-  })
-
   it('a ROM with no loader at all is unavailable', () => {
     const blank = RomFile.fromBytes('x.sfc', Buffer.alloc(0x80000))
     expect(loadClasses(blank)).toMatchObject({ status: 'unavailable' })
@@ -632,6 +622,59 @@ describe('LoadClass runs the loader and reads the class from what it writes', ()
       expect(r.of(0x31)).toBe(cell >= 0x1783 && cell <= 0x178a ? 'shooter' : 'normal')
     },
   )
+})
+
+describe('LoadClass runs the stretch before the call', () => {
+  /** The cart with the callee of call `k` replaced by `bytes`. */
+  const hook = (k: number, bytes: number[]) => cart({}, put => put(stub(k), bytes))
+  const unreached = /does not reach the level loader's call/
+  const toLoader = [ROUTINE & 0xff, ROUTINE >> 8]
+
+  it.each([
+    ['a callee pops its return and leaves', hook(3, [0x68, 0x68, 0x5c, 0x00, 0x80, 0x10])],
+    ['a callee loops', hook(3, [0x80, 0xfe])],
+    ['a callee pops its return and returns out of the stretch', hook(3, [0x68, 0x68, RTS])],
+    ['a callee jumps to the loader with the stack off', hook(3, [0x48, 0x4c, ...toLoader])],
+    [
+      'a JML over one call goes to a stub that returns',
+      cart({}, put => put(SITE - 9, [0x5c, stub(1) & 0xff, stub(1) >> 8, 0x02])),
+    ],
+    ['a BRA over one call goes into a loop', cart({}, put => put(SITE - 9, [0x80, 0xfe]))],
+  ])('unavailable when %s', (_title, rom) => {
+    expect(reasonOf(rom)).toMatch(unreached)
+  })
+
+  it.each([
+    ['a callee that does something else and returns', [0xa9, 0x01, RTS]],
+    ['a callee that jumps to the loader with the stack balanced', [0x4c, ...toLoader]],
+  ])('%s still reads ok: the stretch proves arrival, not what the callees do', (_title, bytes) => {
+    expect(reasonOf(hook(3, bytes))).toBe('ok')
+  })
+
+  it('a byte edit in a callee recomputes', () => {
+    const rom = cart()
+    expect(reasonOf(rom)).toBe('ok')
+    rom.writeAt(stub(5), [0x80, 0xfe])
+    expect(reasonOf(rom)).toMatch(unreached)
+  })
+
+  it('what a callee leaves in WRAM or writes to a routing cell does not reach the sweeps', () => {
+    const latch = [
+      0xa9,
+      0x01,
+      0x8d,
+      0x00,
+      0x0f,
+      0x8f,
+      SCROLL_CELL & 0xff,
+      SCROLL_CELL >> 8,
+      0x00,
+      RTS,
+    ]
+    const r = loadClasses(hook(2, latch))
+    if (r.status !== 'ok') throw new Error(r.reason)
+    expect([0x31, 0x45, 0x95].map(id => r.of(id))).toEqual(['shooter', 'generator', 'scroll'])
+  })
 })
 
 describe('LoadClass extra bit 3', () => {
