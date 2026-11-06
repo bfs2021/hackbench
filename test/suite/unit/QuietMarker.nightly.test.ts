@@ -3,8 +3,8 @@
  * maps of the vanilla ROM (about 90 s, one machine, 2026-11-05). The routed rows (shooter, generator, scroll command:
  * classes the game's loader reads, not a verdict on a run) and the empty-run rows #1132 leaves alone are pinned, so a
  * drawn sprite going quiet by regression fails. A routed id is quiet or drawn, never a failure box, except a non-scroll
- * one with the extra bits set, which stays boxed on purpose (it may be custom). $4D, $4E, $A8 and $C7 are NOT pinned: the
- * reveal work (#1132) draws or changes them. Set QUIET_SWEEP_OUT to write the whole table to a file.
+ * one with the extra bits set, which stays boxed on purpose (it may be custom). $4D, $4E, $A8 and $C7 are #1132's: its reveal search
+ * draws them, so none is a quiet row any more (measured on the merged code, none in the table). Set QUIET_SWEEP_OUT to write the whole table to a file.
  */
 import { readFileSync, writeFileSync } from 'fs'
 import { describe, it, expect } from 'vitest'
@@ -39,7 +39,7 @@ describe.skipIf(!hasRom(VANILLA))('quiet marker sweep, vanilla', () => {
       const table = [...all].sort().map(([k, n]) => `${k} x${n}`)
       if (process.env.QUIET_SWEEP_OUT) writeFileSync(process.env.QUIET_SWEEP_OUT, table.join('\n'))
       expect(routedBoxes).toEqual([])
-      expect(table.filter(l => !/^(4d|4e|a8|c7) /.test(l))).toEqual(PINNED)
+      expect(table).toEqual(PINNED)
     },
   )
 })
