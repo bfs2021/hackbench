@@ -204,6 +204,7 @@ describe('offMapSpritePixels', () => {
       reader(offMapSpritePixels([parent, child], 256, 432, pad, false), 256, pad)(-4, 4),
     ).toEqual([30, 255]) // the parent's own bitmap shows
     expect(offMapSpritePixels([child], 256, 432, pad, false)).toBeNull()
+    expect(offMapSpritePixels([{ ...child, drawnBy: 0 }], 256, 432, pad, false)).toBeNull() // parent at index 0
   })
 
   it('keeps only the pixels outside the map, at their padded position', () => {
