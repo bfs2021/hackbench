@@ -265,6 +265,8 @@ const CALLS = 8
 const stub = (k: number) => 0x029300 + 0x10 * k
 /** The fixture's own routine entry (where the real routine starts), and the stub its one call above the eight goes to. */
 const ENTRY = 0x028ab1
+/** The cell the stretch seeds (PlayerSparkleTimer), which the fixture routine reads to decide on its stub call. */
+const SPARKLE = 0x18d3
 const ABOVE = 0x029500
 const ROUTINE = 0x029000
 const TABLE = 0x029100
@@ -384,7 +386,12 @@ function cart(
       'ret',
       0xee,
       0x00,
-      0x0f, // SRAM and WRAM latches
+      0x0f,
+      0xad,
+      SPARKLE & 0xff,
+      SPARKLE >> 8,
+      BNE_OP,
+      'ret', // SRAM and WRAM latches
       0xa5,
       0x55,
       0x49,
@@ -462,10 +469,26 @@ function cart(
     put(SITE - 3 * k, [0x20, stub(k) & 0xff, stub(k) >> 8])
     put(stub(k), [RTS])
   }
-  // The routine's own start, invented: push a byte, call a stub, branch on a zeroed cell to the eight calls; filler between.
-  // The real routine's JSL at :1401 is jumped over on zero state; this stub call is on the fixture's taken path.
+  // The routine's own start, invented: push a byte, call a stub only when the seeded cell holds 2 (an XOR test, not the
+  // game's), then branch on a zeroed cell to the eight calls; filler between.
   put(ENTRY, new Array(0x54).fill(0x4b))
-  put(ENTRY, [0x48, 0x20, ABOVE & 0xff, ABOVE >> 8, 0xa5, 0x14, 0xf0, 0x4c])
+  put(ENTRY, [
+    0x48,
+    0xad,
+    SPARKLE & 0xff,
+    SPARKLE >> 8,
+    0x49,
+    0x02,
+    0xd0,
+    0x03,
+    0x20,
+    ABOVE & 0xff,
+    ABOVE >> 8,
+    0xa5,
+    0x14,
+    0xf0,
+    0x45,
+  ])
   put(ABOVE, [RTS])
   put(ROUTINE, new Array(0x100).fill(0x4b)) // filler after the code, never run
   put(ROUTINE, code)
@@ -662,8 +685,8 @@ describe('LoadClass runs the stretch before the call', () => {
     ],
     ['a BRA over one call goes into a loop', cart({}, put => put(SITE - 9, [0x80, 0xfe]))],
     [
-      'a JML replaces the stub call above the eight (on its taken path) and never arrives',
-      cart({}, put => (put(ENTRY + 1, [0x5c, 0x00, 0x94, 0x02]), put(0x029400, [0x80, 0xfe]))),
+      'a JMP replaces the seeded call above the eight and never arrives',
+      cart({}, put => (put(ENTRY + 8, [0x4c, 0x00, 0x94]), put(0x029400, [0x80, 0xfe]))),
     ],
     [
       'the first call is a call to the loader and a later one leaves',
@@ -705,6 +728,10 @@ describe('LoadClass runs the stretch before the call', () => {
     ],
   ])('unavailable when %s', (_title, rom) => {
     expect(reasonOf(rom)).toMatch(unreached)
+  })
+
+  it('a hook at the seeded call that returns normally still reads ok', () => {
+    expect(reasonOf(cart({}, put => put(ABOVE, [0xa9, 0x01, RTS])))).toBe('ok')
   })
 
   it.each([['a callee that does something else and returns', [0xa9, 0x01, RTS]]])(

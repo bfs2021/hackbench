@@ -34,9 +34,11 @@ const CALL_SITE = 0x028b1d
 const JSR = 0x20
 /**
  * The main loop's own routine, CODE_028AB1 (bank_02.asm:1355, reached by JSL at bank_00.asm:4535): the stretch runs from its
- * fixed start on zeroed state. It ends in RTL, but the run stops at the loader's call, before that.
+ * fixed start on zeroed state with the sparkle timer seeded. It ends in RTL, but the run stops at the loader's call, before that.
  */
 const STRETCH_AT = 0x028ab1
+/** PlayerSparkleTimer (rammap.asm:1890), seeded to 2: only then does the branch at bank_02.asm:1389-1401 take the JSL, which zero state skips. */
+const SPARKLE_TIMER = 0x18d3
 /** Instructions the stretch may take: the vanilla run is a few hundred, and a callee that loops is refused. */
 const STRETCH_CAP = 10_000
 /** The routine opens with a load of a direct-page cell (bank_02.asm:5224). */
@@ -100,6 +102,7 @@ function entryOf(rom: RomFile): number | string {
  */
 function stretchProblem(cpu: Cpu65816, entry: number): string | null {
   nativeReset(cpu)
+  cpu.bus.write(SPARKLE_TIMER, 2)
   cpu.db = ENTRY_DB
   cpu.pb = STRETCH_AT >> 16
   cpu.pc = STRETCH_AT & 0xffff
