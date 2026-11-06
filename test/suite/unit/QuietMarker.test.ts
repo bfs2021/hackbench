@@ -251,6 +251,9 @@ const SITE = 0x028b1d
 /** How many calls the fixture has before the site, and where the stub each one calls is. */
 const CALLS = 8
 const stub = (k: number) => 0x029300 + 0x10 * k
+/** The fixture's own routine entry (where the real routine starts), and the stub its one call above the eight goes to. */
+const ENTRY = 0x028ab1
+const ABOVE = 0x029500
 const ROUTINE = 0x029000
 const TABLE = 0x029100
 const TABLE_BIT3 = 0x029200
@@ -447,6 +450,10 @@ function cart(
     put(SITE - 3 * k, [0x20, stub(k) & 0xff, stub(k) >> 8])
     put(stub(k), [RTS])
   }
+  // The routine's own start, invented: push a byte, call a stub, branch on a zeroed cell to the eight calls; filler between.
+  put(ENTRY, new Array(0x54).fill(0x4b))
+  put(ENTRY, [0x48, 0x20, ABOVE & 0xff, ABOVE >> 8, 0xa5, 0x14, 0xf0, 0x4c])
+  put(ABOVE, [RTS])
   put(ROUTINE, new Array(0x100).fill(0x4b)) // filler after the code, never run
   put(ROUTINE, code)
   put(
@@ -641,6 +648,10 @@ describe('LoadClass runs the stretch before the call', () => {
       cart({}, put => put(SITE - 9, [0x5c, stub(1) & 0xff, stub(1) >> 8, 0x02])),
     ],
     ['a BRA over one call goes into a loop', cart({}, put => put(SITE - 9, [0x80, 0xfe]))],
+    [
+      'a JML replaces the call above the eight and never arrives',
+      cart({}, put => (put(ENTRY + 1, [0x5c, 0x00, 0x94, 0x02]), put(0x029400, [0x80, 0xfe]))),
+    ],
     [
       'the first call is a call to the loader and a later one leaves',
       cart(

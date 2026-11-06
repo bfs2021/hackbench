@@ -32,8 +32,11 @@ export type LoadClasses =
 /** The call in the sprite main loop (bank_02.asm:1410): one JSR opcode, whose operand is the routine. */
 const CALL_SITE = 0x028b1d
 const JSR = 0x20
-/** The first of the 8 calls in the straight run before the site (bank_02.asm:1402-1409): the stretch is run from here. */
-const STRETCH_AT = 0x028b05
+/**
+ * The main loop's own routine, CODE_028AB1 (bank_02.asm:1355, reached by JSL at bank_00.asm:4535): the stretch runs from its
+ * fixed start on zeroed state. It ends in RTL, but the run stops at the loader's call, before that.
+ */
+const STRETCH_AT = 0x028ab1
 /** Instructions the stretch may take: the vanilla run is a few hundred, and a callee that loops is refused. */
 const STRETCH_CAP = 10_000
 /** The routine opens with a load of a direct-page cell (bank_02.asm:5224). */
@@ -92,7 +95,7 @@ function entryOf(rom: RomFile): number | string {
 /**
  * Runs the main loop's stretch before the call on the core (the calls run as ROM code, none is restated here) and
  * returns why it does not arrive at the loader's entry as the site's own JSR would, or null: at that JSR's stack depth,
- * holding its return address (the address of its last byte). A plain jump or call from a callee, or a pop out of it,
+ * holding its return address (the address of its last byte), under the routine's own PHB. A plain jump or call from a callee, or a pop out of it,
  * fails one of those; a hook that returns normally still arrives, and nothing above the stretch is run.
  */
 function stretchProblem(cpu: Cpu65816, entry: number): string | null {
@@ -104,7 +107,7 @@ function stretchProblem(cpu: Cpu65816, entry: number): string | null {
   const at = (c: Cpu65816) => c.pc === (entry & 0xffff) && (c.pb & 0x7f) === BANK2 >> 16
   const pushed = (c: Cpu65816) => c.bus.read(c.s + 1) | (c.bus.read(c.s + 2) << 8)
   const arrived = (c: Cpu65816) =>
-    at(c) && c.s === s0 - 2 && pushed(c) === (CALL_SITE + 2) % 0x10000
+    at(c) && c.s === s0 - 3 && pushed(c) === (CALL_SITE + 2) % 0x10000
   const off = (c: Cpu65816): CallResult | null =>
     c.s > s0 || (at(c) && !arrived(c)) ? { kind: 'refused', reason: '', at: 0, steps: 0 } : null
   const r = runUntil(cpu, STRETCH_CAP, arrived, off)
