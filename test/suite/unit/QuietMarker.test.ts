@@ -246,7 +246,7 @@ describe('plain words', () => {
 // entry's id through a copy of the list pointer, looks up a class code in a test table and stores in the cell of that
 // class. It also reads the things the loader's caller seeds (DB, the scroll direction, the list end) and refuses to read
 // the id when a run starts from stale state (X, Y, SRAM, a WRAM latch), so each seed and each reset has a test that fails
-// without it. Every store is a long STA or the A register after TXA: none of the game's adjacent instruction pairs.
+// without it. No two adjacent instructions here are an adjacent pair of the game's routine (bank_02.asm:5223-5368), compared by eye against that listing; rom-window-probe --bin over the assembled bytes reports no 8-byte window.
 const SITE = 0x028b1d
 const ROUTINE = 0x029000
 const TABLE = 0x029100
@@ -274,9 +274,13 @@ interface Plan {
   afterStore?: number[]
   /** The cell a shooter id stores in. */
   shootCell?: number
+  /** What an entry with extra bit 3 runs in place of the table lookup, before the id is read. */
+  bit3Path?: number[]
   /** Replace the whole routine. */
   code?: number[]
 }
+/** The id read: through the copied list pointer into X. */
+const ID_READ = [0xa0, 0x03, 0xb7, 0xe0, 0xaa]
 /** A normal id: set the SRAM latch, leave X and Y nonzero, return. */
 const NORMAL_PATH = [
   0xa9,
@@ -289,9 +293,9 @@ const NORMAL_PATH = [
   0x00,
   0x70,
   0xa2,
-  0x01,
+  0x02,
   0xa0,
-  0x01,
+  0x03,
   RTS,
 ]
 /** 255 times round a two-instruction loop: over 500 steps and well under the cap. */
@@ -365,7 +369,7 @@ function cart(
       0x0f, // SRAM and WRAM latches
       0xa5,
       0x55,
-      0xc9,
+      0x49,
       0x01,
       BNE_OP,
       'ret', // the boundary seed
@@ -388,28 +392,21 @@ function cart(
       0x1a,
       BNE_OP,
       'ret', // the list end
-      0xa0,
-      0x03,
-      0xb7,
-      0xe0,
-      0xaa, // the id
-      ...(plan.bit3
+      ...(plan.bit3 || plan.bit3Path
         ? [
-            0xa0,
-            0x00,
-            0xc8,
-            0xb7,
+            0xaf,
+            0x01,
             0xe0,
-            0x29,
+            0x7e,
+            0x89,
             0x08,
             BEQ_OP,
-            'plain',
-            ...lookup(TABLE_BIT3),
-            BRA_OP,
-            'go',
+            'plain', // the flags byte, bit 3
+            ...(plan.bit3Path ?? [...ID_READ, ...lookup(TABLE_BIT3), BRA_OP, 'go']),
             { label: 'plain' },
           ]
         : []),
+      ...ID_READ,
       ...lookup(TABLE),
       { label: 'go' },
       0xc9,
@@ -631,9 +628,9 @@ describe('LoadClass extra bit 3', () => {
   const onShooters = (id: number) => (id >= 0x30 && id < 0x34 ? SCROLL : BANDS(id))
 
   it('an entry with the bit set is a scroll command only when the plain sweep and the second sweep both say so', () => {
-    const r = classesWith(id => (id >= 0xa0 ? SCROLL : NORMAL))
-    expect([0x95, 0xa0].map(id => r.of(id, true))).toEqual(['normal', 'scroll'])
-    expect([0x95, 0xa0].map(id => r.of(id))).toEqual(['scroll', 'scroll'])
+    const r = classesWith(BANDS)
+    expect([0x50, 0x95, 0xa0].map(id => r.of(id, true))).toEqual(['normal', 'scroll', 'scroll'])
+    expect([0x50, 0x95, 0xa0].map(id => r.of(id))).toEqual(['normal', 'scroll', 'scroll'])
   })
 
   it.each([
@@ -650,19 +647,21 @@ describe('LoadClass extra bit 3', () => {
     expect(ran).toEqual([])
   })
 
-  it('the gate keeps an extra-bits entry the second sweep does not call a scroll command', () => {
-    const r = classesWith(id => (id >= 0xa0 ? SCROLL : NORMAL))
+  it('the gate lets an extra-bits scroll command through only when the second sweep agrees on every one', () => {
     const scroll = { ok: false, reason: 'r', routed: 'scroll' } as const
     const results = { 0x95: scroll, 0xa0: scroll }
-    const [lost, kept] = drawSprites(
-      [withBit(0x95), withBit(0xa0)],
-      model,
-      draw(results),
-      undefined,
-      r.of,
-    )
-    expect(lost).toMatchObject({ status: 'placeholder', reason: 'extraBits' })
-    expect(kept).toMatchObject({ status: 'quiet', kind: 'scroll' })
+    const sprites = [withBit(0x95), withBit(0xa0)]
+    const kept = drawSprites(sprites, model, draw(results), undefined, classesWith(BANDS).of)
+    expect(kept.map(d => [d.status, d.kind])).toEqual([
+      ['quiet', 'scroll'],
+      ['quiet', 'scroll'],
+    ])
+    const some = classesWith(id => (id >= 0xa0 ? SCROLL : NORMAL)).of
+    const lost = drawSprites(sprites, model, draw(results), undefined, some)
+    expect(lost.map(d => [d.status, d.reason])).toEqual([
+      ['placeholder', 'extraBits'],
+      ['placeholder', 'extraBits'],
+    ])
   })
 
   it.each([
@@ -674,10 +673,23 @@ describe('LoadClass extra bit 3', () => {
     expect(r.of(0xa0)).toBe('scroll')
   })
 
-  it('a scroll id the second sweep breaks loses only its own exemption, and the plain table still reads', () => {
+  it('one scroll id the second sweep breaks takes every exemption with it, and the plain table still reads', () => {
     const r = classesWith(scrollHole)
-    expect([0xc0, 0xa0].map(id => r.of(id, true))).toEqual(['normal', 'scroll'])
+    expect([0xc0, 0xa0].map(id => r.of(id, true))).toEqual(['normal', 'normal'])
     expect(r.of(0xc0)).toBe('scroll')
+  })
+
+  const READS_ID = [0xa0, 0x03, 0xb7, 0xe0, 0xaa]
+  const FLAT_A0 = [0xa9, 0xa0, 0x8f, SCROLL_CELL & 0xff, SCROLL_CELL >> 8, 0x00]
+  it.each([
+    ['reads the id, ignores it and stores a flat $A0', [...READS_ID, ...FLAT_A0]],
+    ['hits BRK after reading the id', [...READS_ID, 0x00]],
+    ['reads no id and stores a flat $A0', FLAT_A0],
+  ])('a bit-set path that %s exempts nothing, and the plain table still reads', (_t, bit3Path) => {
+    const r = loadClasses(cart({ bit3Path }))
+    if (r.status !== 'ok') throw new Error(r.reason)
+    expect([0x90, 0xa0, 0xff].map(id => r.of(id, true))).toEqual(['normal', 'normal', 'normal'])
+    expect(r.of(0xa0)).toBe('scroll')
   })
 
   it('the other bands may be anything with the bit set', () => {

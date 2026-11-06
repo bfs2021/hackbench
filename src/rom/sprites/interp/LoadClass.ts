@@ -16,7 +16,7 @@
  * each class must be one run of at least two ids, and the runs must come shooter, generator, scroll; anything else is
  * unavailable (a hack that writes a cell for every id would otherwise read as a class). The scroll ids are then run again
  * with extra bit 3 of the entry set, because some hacks move the bands with it (measured); `of(id, true)` is `scroll`
- * only for an id that is a scroll command in both sweeps, storing the same value in the same cell, and `normal` for every
+ * only for an id that is a scroll command in both sweeps, storing the same value in the same cell (all or nothing: one scroll id that differs takes every exemption), and `normal` for every
  * other (the extra-bits gate keeps its box). Every run starts from a restored
  * machine with A, X and Y zero. Seeded: the sprite list pointer and
  * one entry on the screen boundary, the scroll direction that makes that boundary offset zero, DB = 2. Not seen:
@@ -143,7 +143,7 @@ export function loadClasses(rom: RomFile): LoadClasses {
   return cache.lookup(rom, key) ?? run(rom, entry, key)
 }
 
-/** Runs the routine for each id, with and without extra bit 3, on one machine put back between runs, and remembers the verdict. */
+/** Runs the routine for each id, then the scroll ids again with extra bit 3 set, on one machine put back between runs, and remembers the verdict. */
 function run(rom: RomFile, entry: number, key: string): LoadClasses {
   const { bus, cpu } = smwMachine(rom)
   const w = bus.wram
@@ -188,17 +188,15 @@ function run(rom: RomFile, entry: number, key: string): LoadClasses {
   )
   const bad = typeof plain === 'string' ? plain : bandsProblem(plain)
   if (bad || typeof plain === 'string') return cache.store(rom, key, bus, fail(bad!))
-  // With bit 3 set, only the plain scroll ids are run again: one stays a scroll command only if it stores the same value
+  // With bit 3 set, only the plain scroll ids are run again: it stays a scroll command only if every one stores the same value
   // in the same cell. Any other id gets no exemption from the extra-bits gate, so its box stays.
   const scrolls = plain.flatMap((r, id) => (r.cls === 'scroll' ? [id] : []))
   const again = sweep(EXTRA_BIT_3, scrolls)
-  const exempt = new Set(
-    typeof again === 'string'
-      ? []
-      : scrolls.filter(
-          (id, k) => again[k]!.cls === 'scroll' && again[k]!.value === plain[id]!.value,
-        ),
-  )
+  // All or nothing: one id that differs means the bit changes what the routine does with scroll ids, so none is trusted.
+  const agree =
+    typeof again !== 'string' &&
+    scrolls.every((id, k) => again[k]!.cls === 'scroll' && again[k]!.value === plain[id]!.value)
+  const exempt = new Set(agree ? scrolls : [])
   const result: LoadClasses = {
     status: 'ok',
     of: (id, extraBits) =>
