@@ -938,7 +938,9 @@ export function interpRunner(
       const rv = findReveal(seed(camera, { opening }), m, (q, probe) =>
         run(rom, s.spriteId, q, { stopAtDraw: probe }),
       )
-      if (rv.status === 'hidden') return { m: rv.model, fixed: false }
+      // The routing warning of the at-rest run stays: the search's fresh run does not know the loader's routing was unreadable.
+      if (rv.status === 'hidden')
+        return { m: { unverifiedReason: m.unverifiedReason, ...rv.model }, fixed: false }
       if (rv.status === 'refused') return { m: { ...m, chosen: undefined, refusal: rv.reason }, fixed: false } // prettier-ignore
       // Drew from the real start, blank under a probe, no condition found: the real-start picture stands, in the door.
       if (rv.status === 'unrevealed' && rv.drewAtRest)

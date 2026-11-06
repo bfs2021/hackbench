@@ -235,6 +235,7 @@ describe('plain words', () => {
     expect(quietText({ kind: undefined, name: 'Monty Mole', reason: 'unrevealed' })).toBe(
       'Monty Mole: ' + words,
     )
+    expect(spriteProps(d!).notes[0]).toBe(words)
   })
 
   it('the hover and Properties carry it; a failed sprite keeps the old line', () => {
@@ -462,6 +463,7 @@ function cart(
     put(stub(k), [RTS])
   }
   // The routine's own start, invented: push a byte, call a stub, branch on a zeroed cell to the eight calls; filler between.
+  // The real routine's JSL at :1401 is jumped over on zero state; this stub call is on the fixture's taken path.
   put(ENTRY, new Array(0x54).fill(0x4b))
   put(ENTRY, [0x48, 0x20, ABOVE & 0xff, ABOVE >> 8, 0xa5, 0x14, 0xf0, 0x4c])
   put(ABOVE, [RTS])
@@ -660,7 +662,7 @@ describe('LoadClass runs the stretch before the call', () => {
     ],
     ['a BRA over one call goes into a loop', cart({}, put => put(SITE - 9, [0x80, 0xfe]))],
     [
-      'a JML replaces the call above the eight and never arrives',
+      'a JML replaces the stub call above the eight (on its taken path) and never arrives',
       cart({}, put => (put(ENTRY + 1, [0x5c, 0x00, 0x94, 0x02]), put(0x029400, [0x80, 0xfe]))),
     ],
     [

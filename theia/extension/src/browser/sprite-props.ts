@@ -166,7 +166,7 @@ export function spriteProps(s: MapSpriteDto): SpriteProps {
   const notes: string[] = []
   if (s.status === 'placeholder') {
     notes.push(`Not drawn: ${notDrawnText(s.reason)}`)
-  } else if (s.status === 'quiet') notes.push(quietText(s) + '.')
+  } else if (s.status === 'quiet') notes.push(quietText(s).replace(/\.?$/, '.'))
   if (s.unverified) notes.push(UNVERIFIED_NOTE)
   const shift = shiftNote(s)
   if (shift) notes.push(shift)
