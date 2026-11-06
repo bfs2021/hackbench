@@ -68,6 +68,7 @@ import {
   type PaletteWrite,
   type SpritePart,
 } from '../../../../src/rom/sprites/interp/SpriteRunner'
+import { isRopeId, ropeModel, type RopeAt } from '../../../../src/rom/sprites/interp/RopeLength'
 import {
   drawnPass,
   findReveal,
@@ -367,6 +368,9 @@ export function drawSprites(
   })
 }
 
+const NO_IMAGE_NOTE =
+  'The rope is shown at its short length: the level loader could not be run on this ROM.'
+
 /** The engine over this cart: a missing descriptor or a repointed handler is a miss, never a guess. */
 export function engineDrawer(rom: RomFile, marioX: number): SpriteDrawer | null {
   const tables = readSpriteTileTables(rom)
@@ -561,7 +565,8 @@ export function modelResult(m: RunModel): SpriteDrawResult {
     anchor: { x: m.anchor.x, y: m.anchor.y },
     ...(m.reveal ? { reveal: m.reveal } : {}),
     ...stored,
-    ...(m.neverAppears ? { note: 'never appears in play' } : {}),
+    // The two notes are separate sentences; either alone is unchanged.
+    ...(m.neverAppears || m.lengthNote ? { note: [m.neverAppears && 'never appears in play', m.lengthNote].filter(Boolean).join('. ') } : {}), // prettier-ignore
     ...(m.shifted && m.onLine ? { onLine: m.onLine } : {}),
     ...(m.absolutePlacement
       ? {
@@ -799,6 +804,8 @@ export function interpRunner(
   list: readonly LevelSprite[] = [],
   /** Look for what reveals a sprite that draws nothing at rest (RevealSearch.ts): the map view's runs only. */
   reveal: boolean = run === runWithUploads,
+  /** Test hook for the rope: a synthetic cart's loader fingerprint. */
+  ropeHooks: Pick<RopeAt, 'spec'> = {},
 ): (sprite: LevelSprite) => SpriteRun {
   // The loader runs once per map, not per sprite.
   const base = seedFor(rom, index)
@@ -830,12 +837,14 @@ export function interpRunner(
     if (s.spriteId === TORPEDO_LAUNCHER_ID) return { direct: launcherResult(rom, seed(camera)) } // prettier-ignore
     // The map's own loader placed it at map load (D156): it also spawns at the map-load camera.
     const opening = !!w && s.index >= 0 && s.index < 128 && !!w[SPRITE_LOAD_STATUS + s.index]
-    let m = run(
-      rom,
-      s.spriteId,
-      seed(camera, { opening }),
-      reveal ? { trackInputs: true } : undefined,
-    )
+    // The rope draws its length from the slot the loader gives it (RopeLength.ts, #1230): run in that slot, not slot 0.
+    const rope = !!w && isRopeId(s.spriteId)
+    const tracked = reveal ? { trackInputs: true } : undefined
+    let m = rope
+      ? ropeModel(rom, { id: s.spriteId, setting: w![0x1692]!, x, y, vertical: model.isVertical, ...ropeHooks }, slot => run(rom, s.spriteId, seed(camera, { opening, slot }), tracked)) // prettier-ignore
+      : run(rom, s.spriteId, seed(camera, { opening }), tracked)
+    // No loader image: the slot cannot be known, so the rope stays short and says so (a confirmed rope only).
+    if (!w && isRopeId(s.spriteId) && m.snaps) m = { ...m, lengthNote: NO_IMAGE_NOTE }
     // A sprite placed at the game's own layout (the bonus game) was replayed in the loader's top slot; an earlier loaded sprite
     // may have taken it, which moves one block by a pixel and changes its item (measured on $000, slots 9 vs 8): drawn, marked.
     if (
@@ -864,7 +873,8 @@ export function interpRunner(
     // may draw nothing there: the shift is tried the other way, and if that draws nothing too the probe
     // proves nothing and the run stands (no position is invented).
     // A sprite drawn at fixed map positions (InitLatches.ts) has no screen-fixed parts, and its camera is not the loader's.
-    if (m.absolutePlacement) return { m, fixed: false }
+    // A rope is not screen-fixed, and its probe would run in another slot than the picture.
+    if (m.absolutePlacement || (rope && m.snaps)) return { m, fixed: false }
     const dir = [x - camera.x < 128 ? -13 : 13, y - camera.y < 112 ? -11 : 11]
     for (const k of [1, -1]) {
       const shifted = { x: camera.x + dir[0]! * k, y: camera.y + dir[1]! * k }
