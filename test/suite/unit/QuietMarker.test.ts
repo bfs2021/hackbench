@@ -660,6 +660,10 @@ describe('LoadClass runs the stretch before the call', () => {
       'a callee pops its return, pushes another and jumps to the loader',
       hook(3, [0x68, 0x68, 0xf4, 0x34, 0x12, 0x4c, ...toLoader]),
     ],
+    [
+      'a callee pushes the site return address and jumps to the loader from a deeper stack',
+      hook(3, [0xf4, (SITE + 2) & 0xff, ((SITE + 2) >> 8) & 0xff, 0x4c, ...toLoader]),
+    ],
   ])('unavailable when %s', (_title, rom) => {
     expect(reasonOf(rom)).toMatch(unreached)
   })
