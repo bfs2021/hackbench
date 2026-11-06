@@ -37,7 +37,7 @@ const JSR = 0x20
  * fixed start on zeroed state with the sparkle timer seeded. It ends in RTL, but the run stops at the loader's call, before that.
  */
 const STRETCH_AT = 0x028ab1
-/** PlayerSparkleTimer (rammap.asm:1890), seeded to 2: only then does the branch at bank_02.asm:1389-1401 take the JSL, which zero state skips. */
+/** PlayerSparkleTimer (rammap.asm:1890), seeded to 2: an even non-zero value makes the branch at bank_02.asm:1389-1401 take the JSL, which zero state skips. */
 const SPARKLE_TIMER = 0x18d3
 /** Instructions the stretch may take: the vanilla run is a few hundred, and a callee that loops is refused. */
 const STRETCH_CAP = 10_000
