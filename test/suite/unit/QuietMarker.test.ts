@@ -629,6 +629,7 @@ describe('LoadClass runs the stretch before the call', () => {
   const hook = (k: number, bytes: number[]) => cart({}, put => put(stub(k), bytes))
   const unreached = /does not reach the level loader's call/
   const toLoader = [ROUTINE & 0xff, ROUTINE >> 8]
+  const siteReturn = [(SITE + 2) & 0xff, ((SITE + 2) >> 8) & 0xff]
 
   it.each([
     ['a callee pops its return and leaves', hook(3, [0x68, 0x68, 0x5c, 0x00, 0x80, 0x10])],
@@ -659,6 +660,20 @@ describe('LoadClass runs the stretch before the call', () => {
     [
       'a callee pops its return, pushes another and jumps to the loader',
       hook(3, [0x68, 0x68, 0xf4, 0x34, 0x12, 0x4c, ...toLoader]),
+    ],
+    [
+      'a callee pops below the stretch, then forges the site frame and jumps to the loader',
+      hook(3, [0x68, 0x68, 0x68, 0x68, 0xf4, 0x00, 0x00, 0xf4, ...siteReturn, 0x4c, ...toLoader]),
+    ],
+    [
+      'a callee forges the site frame and jumps to the loader address in another bank',
+      cart(
+        {},
+        put => (
+          put(stub(3), [0x68, 0x68, 0xf4, ...siteReturn, 0x5c, ...toLoader, 0x03]),
+          put(0x039000, [0x80, 0xfe])
+        ),
+      ),
     ],
     [
       'a callee pushes the site return address and jumps to the loader from a deeper stack',
