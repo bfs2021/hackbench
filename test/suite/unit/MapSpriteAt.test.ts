@@ -82,13 +82,13 @@ describe('spriteAt', () => {
   it('a child is hit only through its parent: never alone where the parent has no pixel (#1173)', () => {
     const parent = dto(0x9c, 29, [1, 0], [2, 1], [1]) // opaque at x1, hole at x2
     const child = dto(0x9b, 28, [2, 0], [2, 1], [], { drawnBy: 29 }) // opaque at x2 and x3, beside the parent's box
+    const other = dto(0x10, 30, [2, 0], [2, 1])
     for (const ids of [
       [parent, child],
       [child, parent],
     ]) {
       expect(spriteAt(ids, H, 2, 0)).toBeUndefined() // parent transparent here
       expect(spriteAt(ids, H, 3, 0)).toBeUndefined() // outside the parent's box
-      const other = dto(0x10, 30, [2, 0], [2, 1])
       expect(spriteAt([...ids, other], H, 2, 0)).toBe(other)
       expect(spriteAt([...ids, other], H, 3, 0)).toBe(other)
     }
