@@ -113,10 +113,9 @@ function entryOf(rom: RomFile): number | string {
 
 /**
  * Runs the main loop's stretch before the call on the core (the calls run as ROM code, none is restated here) and
- * returns why it does not arrive at the loader's `entry` as the site's own JSR would, or null: the stack at the depth
- * that JSR leaves, holding that JSR's return address (a JSR pushes the address of its last byte). Arriving by a jump or
- * call from a callee, or after a pop out of the stretch, fails one of those. A hook that returns normally still
- * arrives; nothing above the stretch is run.
+ * returns why it does not arrive at the loader's  as the site's own JSR would, or null: at that JSR's stack depth,
+ * holding its return address (the address of its last byte). A jump or call from a callee, or a pop out of the stretch,
+ * fails one of those; a hook that returns normally still arrives, and nothing above the stretch is run.
  */
 function stretchProblem(cpu: Cpu65816, entry: number): string | null {
   nativeReset(cpu)
