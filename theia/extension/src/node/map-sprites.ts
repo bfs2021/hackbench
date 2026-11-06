@@ -181,6 +181,8 @@ export type SpriteDrawResult =
       children?: { index: number; parts: DrawPart[] }[]
       /** A plain-words line about what the map shows of this sprite (not a flaw): it goes on the map's note line. */
       note?: string
+      /** The interpreter detail behind a plain note, for its tooltip. */
+      noteDetail?: string
     })
   | Extract<EngineResult, { ok: false }>
   | {
@@ -335,7 +337,12 @@ export function drawSprites(
     )
       return quiet(s, res.reason, 'routed' in res ? res.routed : undefined)
     if (!res.ok) return placeholder(s, 'reason' in res ? res.reason : res.failure.kind, 'unverified' in res ? res.unverified : undefined) // prettier-ignore
-    if (res.parts.length === 0) return placeholder(s, 'noParts')
+    // A marker says what the drawn sprite would have: the note reaches the map's note line either way.
+    const told = {
+      ...('note' in res && res.note ? { note: res.note } : {}),
+      ...('noteDetail' in res && res.noteDetail ? { noteDetail: res.noteDetail } : {}),
+    }
+    if (res.parts.length === 0) return { ...placeholder(s, 'noParts'), ...told }
     let unverified = 'unverified' in res ? res.unverified : undefined
     let upload: Map<number, Uint8Array> | undefined
     if ('uploads' in res && res.uploads?.length) {
@@ -352,7 +359,7 @@ export function drawSprites(
     // say how many do not, and keep the marker only when none does. `parts` and `pixels` stay index-aligned.
     const parts = res.parts.filter((_, i) => art[i])
     const pixels = art.filter(a => a)
-    if (parts.length === 0) return placeholder(s, 'charsNotLoaded')
+    if (parts.length === 0) return { ...placeholder(s, 'charsNotLoaded'), ...told }
     if (parts.length < res.parts.length) {
       const why = `${res.parts.length - parts.length} of ${res.parts.length} pieces are not drawn: their graphics are not in this map's loaded sprite graphics` // prettier-ignore
       unverified = unverified ? `${unverified}; ${why}` : why
@@ -401,7 +408,7 @@ export function drawSprites(
       priority: base64(new Uint8ClampedArray(prio.buffer)),
       status: 'drawn',
       ...(unverified ? { unverified } : {}),
-      ...('note' in res && res.note ? { note: res.note } : {}),
+      ...told,
       ...('reveal' in res && res.reveal
         ? { screenDoor: true, reveal: revealText(res.reveal) }
         : {}),
@@ -743,6 +750,7 @@ function eeriesResult(
     identity: { spriteId: s.spriteId, mainHandler: 0, initHandler: 0, status: 'vanilla' },
     // Fewer than five is the game's answer for this map's slot range, not a flaw: said in plain words, not `unverified`.
     ...(notes.length ? { note: notes.join(' ') } : {}),
+    ...(r.noteDetail ? { noteDetail: r.noteDetail } : {}),
     ...(why
       ? { unverified: `the five Eeries are drawn from the spawner the loader calls, and ${why}` }
       : {}),
@@ -793,6 +801,7 @@ function platformsResult(
     anchor: { x, y },
     identity: { spriteId: s.spriteId, mainHandler: 0, initHandler: 0, status: 'vanilla' },
     ...(notes.length ? { note: notes.join(' ') } : {}),
+    ...(r.noteDetail ? { noteDetail: r.noteDetail } : {}),
     ...(why
       ? {
           unverified: `the three platforms are drawn from the spawner the loader calls, and ${why}`,
@@ -1169,6 +1178,8 @@ export function spriteLayer(
     routedOf,
   ).map(named)
   const unverified = unverifiedNote(sprites)
+  const details = new Set(sprites.flatMap(s => (s.noteDetail ? [s.noteDetail] : [])))
+  const detail = [unverified?.detail, ...details].filter(Boolean).join('\n')
   return {
     status: 'ok',
     orientation: model.isVertical ? 'vertical' : 'horizontal',
@@ -1186,7 +1197,7 @@ export function spriteLayer(
       ]
         .filter(Boolean)
         .join(' ') || undefined,
-    ...(unverified ? { noteDetail: unverified.detail } : {}),
+    ...(detail ? { noteDetail: detail } : {}),
   }
 }
 
