@@ -640,16 +640,36 @@ describe('LoadClass runs the stretch before the call', () => {
       cart({}, put => put(SITE - 9, [0x5c, stub(1) & 0xff, stub(1) >> 8, 0x02])),
     ],
     ['a BRA over one call goes into a loop', cart({}, put => put(SITE - 9, [0x80, 0xfe]))],
+    [
+      'the first call is a call to the loader and a later one leaves',
+      cart(
+        {},
+        put => (
+          put(SITE - 24, [0x20, ...toLoader]),
+          put(stub(5), [0x68, 0x68, 0x5c, 0x00, 0x80, 0x10])
+        ),
+      ),
+    ],
+    ['the last call is a call to the loader', cart({}, put => put(SITE - 3, [0x20, ...toLoader]))],
+    ['a callee jumps to the loader with the stack balanced', hook(3, [0x4c, ...toLoader])],
+    [
+      'a callee returns into the loader through a pushed address',
+      hook(3, [0xf4, (ROUTINE - 1) & 0xff, (ROUTINE - 1) >> 8, RTS]),
+    ],
+    [
+      'a callee pops its return, pushes another and jumps to the loader',
+      hook(3, [0x68, 0x68, 0xf4, 0x34, 0x12, 0x4c, ...toLoader]),
+    ],
   ])('unavailable when %s', (_title, rom) => {
     expect(reasonOf(rom)).toMatch(unreached)
   })
 
-  it.each([
-    ['a callee that does something else and returns', [0xa9, 0x01, RTS]],
-    ['a callee that jumps to the loader with the stack balanced', [0x4c, ...toLoader]],
-  ])('%s still reads ok: the stretch proves arrival, not what the callees do', (_title, bytes) => {
-    expect(reasonOf(hook(3, bytes))).toBe('ok')
-  })
+  it.each([['a callee that does something else and returns', [0xa9, 0x01, RTS]]])(
+    '%s still reads ok: the stretch proves arrival, not what the callees do',
+    (_title, bytes) => {
+      expect(reasonOf(hook(3, bytes))).toBe('ok')
+    },
+  )
 
   it('a byte edit in a callee recomputes', () => {
     const rom = cart()

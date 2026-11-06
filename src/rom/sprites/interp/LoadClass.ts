@@ -11,9 +11,10 @@
  * returns with the stack wrong makes the whole table `status: 'unavailable'`, with the id and the reason. A return
  * through another bank's mirror of bank 2 is a return.
  *
- * The 8 calls before the site (:1402-1409) are run first, from the first of them, and must arrive at the entry with the
- * stack where the site's own JSR leaves it, or the table is unavailable. Limits: nothing above the entry is proved, a
- * hook that returns normally still passes, and a tail-jump to the entry with the stack balanced still passes.
+ * The 8 calls before the site (:1402-1409) are run first, from the first of them, on zeroed state, and must arrive at the
+ * entry as the site's own JSR would (its stack depth and return address), or the table is unavailable. Limits: nothing
+ * above the entry is proved, a hook that returns normally still passes, and a diversion behind state the zero run does
+ * not set is not seen (the callees take their empty paths).
  *
  * Each run must read the entry's id before it writes or returns, and the table must hold both routed and normal ids, or
  * it proves nothing and is unavailable. Within each class the value written must step with the id (id minus a constant),
@@ -112,9 +113,10 @@ function entryOf(rom: RomFile): number | string {
 
 /**
  * Runs the main loop's stretch before the call on the core (the calls run as ROM code, none is restated here) and
- * returns why it does not arrive at the loader's `entry` with the stack where the site's own JSR leaves it, or null.
- * Arriving from inside a callee, or after a pop out of the stretch, has another depth and is refused. A hook that
- * returns normally still arrives; nothing above the stretch is run.
+ * returns why it does not arrive at the loader's `entry` as the site's own JSR would, or null: the stack at the depth
+ * that JSR leaves, holding that JSR's return address (a JSR pushes the address of its last byte). Arriving by a jump or
+ * call from a callee, or after a pop out of the stretch, fails one of those. A hook that returns normally still
+ * arrives; nothing above the stretch is run.
  */
 function stretchProblem(cpu: Cpu65816, entry: number): string | null {
   nativeReset(cpu)
@@ -123,9 +125,12 @@ function stretchProblem(cpu: Cpu65816, entry: number): string | null {
   cpu.pc = STRETCH_AT & 0xffff
   const s0 = cpu.s
   const at = (c: Cpu65816) => c.pc === (entry & 0xffff) && (c.pb & 0x7f) === BANK2 >> 16
+  const pushed = (c: Cpu65816) => c.bus.read(c.s + 1) | (c.bus.read(c.s + 2) << 8)
+  const arrived = (c: Cpu65816) =>
+    at(c) && c.s === s0 - 2 && pushed(c) === (CALL_SITE + 2) % 0x10000
   const off = (c: Cpu65816): CallResult | null =>
-    c.s > s0 || (at(c) && c.s !== s0 - 2) ? { kind: 'refused', reason: '', at: 0, steps: 0 } : null
-  const r = runUntil(cpu, STRETCH_CAP, c => at(c) && c.s === s0 - 2, off)
+    c.s > s0 || (at(c) && !arrived(c)) ? { kind: 'refused', reason: '', at: 0, steps: 0 } : null
+  const r = runUntil(cpu, STRETCH_CAP, arrived, off)
   return r.kind === 'returned'
     ? null
     : "the sprite main loop does not reach the level loader's call"
