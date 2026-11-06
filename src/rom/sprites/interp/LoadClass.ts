@@ -6,11 +6,14 @@
  * The class is read by effect, not by shape: the ROM's own routine runs on the 65816 core, once per id with a one-entry
  * list, and the class is the first of three RAM cells it writes (the scroll command, the generator number, the shooter
  * table; rammap.asm). A run that reaches its return with none of them is a normal sprite. The one fixed call site is
- * checked as a single JSR opcode, as are the 8 calls before it (the straight run back to the last branch target, :1402-1409),
- * and its target is READ from the operand, so a hack that moves the routine still reads; the target must open with a
- * load of a direct-page cell. A run that leaves ROM, hits BRK, spends the step cap or returns with the stack wrong makes
- * the whole table `status: 'unavailable'`, with the id and the reason. A return through another bank's mirror of bank 2
- * is a return.
+ * checked as a single JSR opcode and its target is READ from the operand, so a hack that moves the routine still reads;
+ * the target must open with a load of a direct-page cell. A run that leaves ROM, hits BRK, spends the step cap or
+ * returns with the stack wrong makes the whole table `status: 'unavailable'`, with the id and the reason. A return
+ * through another bank's mirror of bank 2 is a return.
+ *
+ * The 8 calls before the site (:1402-1409) are run first, from the first of them, and must arrive at the entry with the
+ * stack where the site's own JSR leaves it, or the table is unavailable. Limits: nothing above the entry is proved, a
+ * hook that returns normally still passes, and a tail-jump to the entry with the stack balanced still passes.
  *
  * Each run must read the entry's id before it writes or returns, and the table must hold both routed and normal ids, or
  * it proves nothing and is unavailable. Within each class the value written must step with the id (id minus a constant),
@@ -20,11 +23,13 @@
  * only for an id that is a scroll command in both sweeps, storing the same value in the same cell (all or nothing: one
  * that differs takes every exemption), and `normal` for every other (the extra-bits gate keeps its box). Every run starts
  * from a restored machine with A, X and Y zero. Seeded: the sprite list pointer and one entry on the screen boundary, the
- * scroll direction that makes that boundary offset zero, DB = 2. Not seen: everything after the first write to a cell (a scroll command's setup call leaves ROM or unbalances the stack
- * on some ids past the table), extra bit 2 and a vertical level (no band moved), whether the game reaches the routine on
- * a given frame, what a hook does after the cell is written, the code before the walk, and a hook inside a called routine
- * that leaves the loop. Evidence: the vanilla and Magic ROMs read the same table, and three hacks; the ids and the other
- * ROMs are in docs/rom/map-data-mechanics.md (one machine, 2026-11-05).
+ * scroll direction that makes that boundary offset zero, DB = 2.
+ *
+ * Not seen: everything after the first write to a cell (a scroll command's setup call leaves ROM or unbalances the stack
+ * on some ids past the table), extra bit 2 and a vertical level (no band moved in the measured ROMs), whether the game
+ * reaches the routine on a given frame, and what a hook does after the cell is written. Evidence: the vanilla and Magic
+ * ROMs read the same table, and three hacks; the ids and the other ROMs are in docs/rom/map-data-mechanics.md (one
+ * machine, 2026-11-05).
  */
 import {
   Refusal,
